@@ -105,7 +105,7 @@ class SLAMWebServer:
             ips = result.stdout.strip().split()
             if ips:
                 print(f"X99 IPs: {', '.join(ips)}")
-                print(f"Web Interface: http://{ips[0]}:5000")
+                print(f"Web Interface: http://{ips[0]}:1234")
         except:
             pass
         
@@ -860,8 +860,8 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='X99 SLAM Web Interface')
-    parser.add_argument('--host', type=str, default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=5000)
+    parser.add_argument('--host', type=str, default='192.168.2.10')
+    parser.add_argument('--port', type=int, default=1234)
     
     args = parser.parse_args()
     
