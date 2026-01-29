@@ -47,7 +47,7 @@ class SLAMWebServer:
             self.has_slam = False
         
         # Depth mapping components
-        self.depth_mapper = StereoDepthMapper(baseline=0.275, focal_length=500)
+        self.depth_mapper = StereoDepthMapper(baseline=0.01, focal_length=500)
         self.grid_mapper = OccupancyGridMapper(grid_size=400, resolution=0.05, max_range=5.0)
         self.avoidance = ObstacleAvoidance(safety_distance=0.5, max_linear_vel=0.3)
         
