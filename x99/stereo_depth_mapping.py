@@ -13,7 +13,7 @@ import time
 class StereoDepthMapper:
     """Create depth map and 2D occupancy grid from stereo cameras"""
     
-    def __init__(self, baseline: float = 0.275, focal_length: float = 500,
+    def __init__(self, baseline: float = 0.01, focal_length: float = 500,
                  cx: float = 320, cy: float = 240):
         """
         baseline: Distance between cameras in meters (27.5cm)
