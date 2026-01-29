@@ -45,8 +45,17 @@
             border-radius: 8px;
             overflow: hidden;
         }
-        .camera-box header { padding: 5px 10px; font-size: 12px; background: #222; }
-        .camera-box img { width: 100%; display: block; background: #000; min-height: 180px; }
+        .camera-box header { 
+            padding: 5px 10px; 
+            font-size: 12px; 
+            background: #222; 
+        }
+        .camera-box img { 
+            width: 100%; 
+            display: block; 
+            background: #000; 
+            min-height: 180px; 
+        }
         
         .slam-container {
             background: #000;
@@ -54,7 +63,11 @@
             position: relative;
             border: 1px solid #333;
         }
-        #threejs-canvas { width: 100%; height: 100%; outline: none; }
+        #threejs-canvas { 
+            width: 100%; 
+            height: 100%; 
+            outline: none; 
+        }
         
         .controls {
             position: absolute;
@@ -71,9 +84,11 @@
             border: none;
             border-radius: 4px;
             font-weight: bold;
+            margin: 2px;
         }
         .btn-start { background: #2ecc71; color: white; }
         .btn-stop { background: #e74c3c; color: white; }
+        .btn-clear { background: #f39c12; color: white; }
         
         .stats-panel {
             background: #1e1e1e;
@@ -83,6 +98,20 @@
             line-height: 1.6;
         }
         .status-online { color: #2ecc71; }
+        .status-offline { color: #e74c3c; }
+        
+        .debug-panel {
+            background: #1e1e1e;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+        .debug-panel .error { color: #e74c3c; }
+        .debug-panel .success { color: #2ecc71; }
+        .debug-panel .info { color: #3498db; }
     </style>
 </head>
 <body>
@@ -105,7 +134,11 @@
         <div class="stats-panel">
             <strong>Hệ thống:</strong> <span id="sys-uptime">0s</span><br>
             <strong>Điểm 3D:</strong> <span id="point-count">0</span><br>
-            <strong>FPS:</strong> <span id="fps-val">0</span>
+            <strong>FPS:</strong> <span id="fps-val">0</span><br>
+            <strong>Trajectory:</strong> <span id="trajectory-count">0</span>
+        </div>
+        <div class="debug-panel" id="debug-console">
+            <div class="info">Debug Console</div>
         </div>
     </div>
 
@@ -113,6 +146,7 @@
         <div class="controls">
             <button class="btn-start" id="btn-start">START STREAM</button>
             <button class="btn-stop" id="btn-stop">STOP</button>
+            <button class="btn-clear" id="btn-clear">CLEAR MAP</button>
         </div>
         <div id="threejs-canvas"></div>
     </div>
@@ -124,6 +158,25 @@
     const videoRight = document.getElementById('video-right');
     const btnStart = document.getElementById('btn-start');
     const btnStop = document.getElementById('btn-stop');
+    const btnClear = document.getElementById('btn-clear');
+    const debugConsole = document.getElementById('debug-console');
+
+    // Debug logging
+    function logDebug(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const div = document.createElement('div');
+        div.className = type;
+        div.textContent = `[${timestamp}] ${message}`;
+        debugConsole.appendChild(div);
+        
+        // Keep only last 20 messages
+        while (debugConsole.children.length > 20) {
+            debugConsole.removeChild(debugConsole.children[1]); // Keep first debug header
+        }
+        
+        debugConsole.scrollTop = debugConsole.scrollHeight;
+        console.log(`[${type}] ${message}`);
+    }
 
     // --- CẤU HÌNH THREE.JS (3D MAP) ---
     let scene, camera, renderer, controls, pointCloud;
@@ -144,8 +197,11 @@
         controls = new THREE.OrbitControls(camera, renderer.domElement);
         
         // Trục tọa độ và lưới
-        scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
-        scene.add(new THREE.AxesHelper(2));
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+        scene.add(gridHelper);
+        
+        const axesHelper = new THREE.AxesHelper(2);
+        scene.add(axesHelper);
 
         // Robot Marker (Khối hộp xanh lá)
         const robotGeo = new THREE.BoxGeometry(0.3, 0.1, 0.4);
@@ -153,6 +209,7 @@
         robotMesh = new THREE.Mesh(robotGeo, robotMat);
         scene.add(robotMesh);
 
+        logDebug('Three.js initialized', 'success');
         animate();
     }
 
@@ -163,24 +220,55 @@
     }
 
     // --- CẬP NHẬT DỮ LIỆU TỪ SERVER ---
+    let fetchAttempts = 0;
+    let lastPointCount = 0;
+
     async function fetchMapData() {
         try {
+            fetchAttempts++;
             const response = await fetch('/api/map_data');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
             const data = await response.json();
+            
+            // Debug log
+            if (fetchAttempts % 5 === 0) { // Log every 5 attempts
+                logDebug(`Fetch #${fetchAttempts}: ${data.points ? data.points.length : 0} points`, 
+                         data.points && data.points.length > 0 ? 'success' : 'info');
+            }
             
             if (data.points && data.points.length > 0) {
                 updatePointCloud(data.points, data.colors);
+                
+                // Only log if point count changed significantly
+                if (Math.abs(data.points.length - lastPointCount) > 100) {
+                    logDebug(`Map updated: ${data.points.length} points`, 'success');
+                    lastPointCount = data.points.length;
+                }
+                
                 document.getElementById('point-count').innerText = data.points.length.toLocaleString();
+            } else {
+                if (fetchAttempts === 1 || fetchAttempts % 10 === 0) {
+                    logDebug('Waiting for map data...', 'info');
+                }
             }
+            
             if (data.robot_pose) {
                 robotMesh.position.set(data.robot_pose[0], data.robot_pose[1], data.robot_pose[2]);
             }
         } catch (e) {
-            console.error("Lỗi tải map:", e);
+            if (fetchAttempts % 10 === 0) { // Only log error every 10 attempts
+                logDebug(`Lỗi tải map: ${e.message}`, 'error');
+            }
+            console.error("Map fetch error:", e);
         }
     }
 
     function updatePointCloud(points, colors) {
+        // Remove old point cloud
         if (pointCloud) {
             scene.remove(pointCloud);
             pointCloud.geometry.dispose();
@@ -210,18 +298,47 @@
         videoLeft.src = `/video/left?t=${t}`;
         videoRight.src = `/video/right?t=${t}`;
         socket.emit('start_streaming');
+        logDebug('Streaming started', 'success');
     }
 
     function stopStreaming() {
         videoLeft.src = '';
         videoRight.src = '';
         socket.emit('stop_streaming');
+        logDebug('Streaming stopped', 'info');
+    }
+
+    async function clearMap() {
+        try {
+            const response = await fetch('/api/clear_map');
+            const data = await response.json();
+            
+            if (data.success) {
+                logDebug('Map cleared successfully', 'success');
+                
+                // Clear visualization
+                if (pointCloud) {
+                    scene.remove(pointCloud);
+                    pointCloud.geometry.dispose();
+                    pointCloud.material.dispose();
+                    pointCloud = null;
+                }
+                
+                document.getElementById('point-count').innerText = '0';
+                lastPointCount = 0;
+            }
+        } catch (e) {
+            logDebug(`Clear map error: ${e.message}`, 'error');
+        }
     }
 
     // --- KHỞI TẠO ---
     window.addEventListener('load', () => {
         init3D();
-        setInterval(fetchMapData, 1000); // Cập nhật map 3D mỗi giây
+        logDebug('Application started', 'success');
+        
+        // Fetch map data every second
+        setInterval(fetchMapData, 1000);
     });
 
     window.addEventListener('resize', () => {
@@ -233,20 +350,47 @@
 
     btnStart.addEventListener('click', startStreaming);
     btnStop.addEventListener('click', stopStreaming);
+    btnClear.addEventListener('click', clearMap);
 
     socket.on('connect', () => {
         document.getElementById('connection-status').innerHTML = '<span class="status-online">● ĐÃ KẾT NỐI SERVER</span>';
+        logDebug('Connected to server', 'success');
+    });
+
+    socket.on('disconnect', () => {
+        document.getElementById('connection-status').innerHTML = '<span class="status-offline">● MẤT KẾT NỐI</span>';
+        logDebug('Disconnected from server', 'error');
     });
 
     socket.on('stats_update', (data) => {
         document.getElementById('sys-uptime').innerText = Math.floor(data.uptime) + 's';
-        document.getElementById('fps-val').innerText = data.fps_left.toFixed(1);
+        document.getElementById('fps-val').innerText = data.left_fps.toFixed(1);
+        
+        if (data.trajectory_length !== undefined) {
+            document.getElementById('trajectory-count').innerText = data.trajectory_length;
+        }
+        
+        if (data.persistent_map_points !== undefined && data.persistent_map_points > 0) {
+            document.getElementById('point-count').innerText = data.persistent_map_points.toLocaleString();
+        }
     });
 
     // Tự động tải lại stream nếu lỗi
     [videoLeft, videoRight].forEach(img => {
         img.addEventListener('error', () => {
-            if(img.src !== '') setTimeout(() => { img.src = img.src.split('?')[0] + '?t=' + Date.now(); }, 1000);
+            if(img.src !== '') {
+                setTimeout(() => { 
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now(); 
+                }, 1000);
+            }
+        });
+        
+        img.addEventListener('load', () => {
+            if (img === videoLeft) {
+                logDebug('Left camera stream loaded', 'success');
+            } else {
+                logDebug('Right camera stream loaded', 'success');
+            }
         });
     });
 

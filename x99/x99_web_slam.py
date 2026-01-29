@@ -156,7 +156,7 @@ class SLAMWebServer:
             points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left)
             
             if len(points) > 100:
-                # Add to persistent map
+                # Add to persistent map - CRITICAL: Accumulate points for SLAM map
                 self.persistent_map.add_point_cloud(points, colors, self.robot_pose)
                 
                 # Update occupancy grid
@@ -194,16 +194,6 @@ class SLAMWebServer:
             import traceback
             traceback.print_exc()
         
-        points, colors = self.depth_mapper.depth_to_point_cloud(depth, left_frame)
-
-        # 2. KIỂM TRA QUAN TRỌNG: Lưu điểm vào PersistentMap
-        # Nếu thiếu đoạn này, map sẽ luôn rỗng vì không có dữ liệu được tích lũy
-        if len(points) > 0 and self.persistent_map is not None:
-            # robot_pose hiện tại (nếu chưa có thuật toán odometry thì giả định là [0,0,0])
-            current_pose = self.robot_pose if hasattr(self, 'robot_pose') else [0, 0, 0]
-            
-            # Thêm điểm vào map
-            self.persistent_map.add_point_cloud(points, colors, current_pose)
         # ORB-SLAM processing
         if not self.has_slam or self.orb_extractor is None:
             return frame_left, 0, 0, 0
@@ -221,152 +211,155 @@ class SLAMWebServer:
             if self.yolo and self.yolo.model:
                 try:
                     results = self.yolo.segment(frame_left, conf=0.5)
-                    processed = self.yolo.draw_segments(frame_left, results)
-                except:
-                    pass
+                    if results:
+                        processed = self.yolo.draw_segments(frame_left, results)
+                except Exception as e:
+                    print(f"[Web] YOLO error: {e}")
             
-            # Draw features
-            frame_with_features = cv2.drawKeypoints(
+            # Draw ORB features
+            frame_slam = cv2.drawKeypoints(
                 processed, kp_left, None,
                 color=(0, 255, 0),
                 flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
             )
             
-            # Add text overlay
-            cv2.putText(frame_with_features, f"Features: {len(kp_left)}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame_with_features, f"Matches: {len(matches)}", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame_with_features, f"Map: {self.stats['persistent_map_points']} pts", 
-                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            # Update stats
+            self.stats['orb_features'] = len(kp_left)
+            self.stats['matches'] = len(matches)
             
-            return frame_with_features, len(kp_left), len(kp_right), len(matches)
+            return frame_slam, len(kp_left), len(kp_right), len(matches)
             
         except Exception as e:
-            print(f"[Web] SLAM error: {e}")
+            print(f"[Web] ORB processing error: {e}")
+            import traceback
+            traceback.print_exc()
             return frame_left, 0, 0, 0
     
     def generate_left_stream(self):
         """Generate left camera MJPEG stream"""
-        while self.streaming:
-            frame = self.left_receiver.get_latest_frame()
+        while self.is_running and self.streaming:
+            if self.left_receiver.latest_frame is not None:
+                frame = self.left_receiver.latest_frame.copy()
+                
+                # Add info overlay
+                cv2.putText(frame, f"LEFT CAM - FPS: {self.stats['left_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Encode to JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            if frame is not None:
-                # Encode as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            
-            time.sleep(0.033)  # ~30 FPS
+            time.sleep(0.03)  # ~30 FPS
     
     def generate_right_stream(self):
         """Generate right camera MJPEG stream"""
-        while self.streaming:
-            frame = self.right_receiver.get_latest_frame()
+        while self.is_running and self.streaming:
+            if self.right_receiver.latest_frame is not None:
+                frame = self.right_receiver.latest_frame.copy()
+                
+                # Add info overlay
+                cv2.putText(frame, f"RIGHT CAM - FPS: {self.stats['right_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Encode to JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            if frame is not None:
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            
-            time.sleep(0.033)
+            time.sleep(0.03)
     
     def generate_slam_stream(self):
-        """Generate SLAM processed stream"""
-        while self.streaming:
-            frame_left = self.left_receiver.get_latest_frame()
-            frame_right = self.right_receiver.get_latest_frame()
-            
-            if frame_left is not None and frame_right is not None:
+        """Generate SLAM-processed MJPEG stream"""
+        while self.is_running and self.streaming:
+            if self.left_receiver.latest_frame is not None and self.right_receiver.latest_frame is not None:
                 # Process SLAM
-                processed, kp_left, kp_right, matches = self.process_slam(frame_left, frame_right)
+                frame_slam, n_kp_left, n_kp_right, n_matches = self.process_slam(
+                    self.left_receiver.latest_frame,
+                    self.right_receiver.latest_frame
+                )
                 
-                # Update stats
-                self.stats['orb_features'] = kp_left
-                self.stats['matches'] = matches
+                # Add info overlay
+                cv2.putText(frame_slam, f"SLAM - Features: {n_kp_left} Matches: {n_matches}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame_slam, f"Map Points: {self.stats['persistent_map_points']}",
+                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
-                # Encode
-                ret, buffer = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                # Encode to JPEG
+                _, buffer = cv2.imencode('.jpg', frame_slam, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            time.sleep(0.033)
+            time.sleep(0.03)
     
     def generate_depth_stream(self):
-        """Generate depth map stream"""
-        while self.streaming:
+        """Generate depth map MJPEG stream"""
+        while self.is_running and self.streaming:
             with self.depth_lock:
-                depth = self.latest_depth
-            
-            if depth is not None:
-                # Normalize and colorize depth
-                depth_vis = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                depth_color = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-                
-                # Add scale bar
-                cv2.putText(depth_color, "0m", (10, depth_color.shape[0]-10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.putText(depth_color, "5m", (depth_color.shape[1]-40, depth_color.shape[0]-10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                
-                # Encode
-                ret, buffer = cv2.imencode('.jpg', depth_color, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
+                if self.latest_depth is not None:
+                    # Normalize depth for visualization
+                    depth_norm = cv2.normalize(self.latest_depth, None, 0, 255, cv2.NORM_MINMAX)
+                    depth_colored = cv2.applyColorMap(depth_norm.astype(np.uint8), cv2.COLORMAP_JET)
+                    
+                    # Add info overlay
+                    cv2.putText(depth_colored, "DEPTH MAP",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    # Encode to JPEG
+                    _, buffer = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     frame_bytes = buffer.tobytes()
+                    
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            time.sleep(0.033)
+            time.sleep(0.03)
     
     def generate_grid_stream(self):
-        """Generate occupancy grid stream"""
-        while self.streaming:
+        """Generate occupancy grid MJPEG stream"""
+        while self.is_running and self.streaming:
             with self.depth_lock:
-                grid = self.latest_grid
-            
-            if grid is not None:
-                # Resize for better visibility
-                grid_large = cv2.resize(grid, (600, 600), interpolation=cv2.INTER_NEAREST)
-                
-                # Add velocity info
-                cv2.putText(grid_large, f"Velocity: {self.stats['linear_vel']:.2f} m/s", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(grid_large, f"Turn: {self.stats['angular_vel']:.2f} rad/s", 
-                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(grid_large, f"Obstacles: {self.stats['obstacles_detected']}", 
-                           (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                
-                # Encode
-                ret, buffer = cv2.imencode('.jpg', grid_large, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                if ret:
+                if self.latest_grid is not None:
+                    # Resize for better visibility
+                    grid_large = cv2.resize(self.latest_grid, (640, 640), interpolation=cv2.INTER_NEAREST)
+                    
+                    # Add info overlay
+                    cv2.putText(grid_large, f"PERSISTENT MAP - {self.stats['persistent_map_points']} points",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    cv2.putText(grid_large, f"Trajectory: {self.stats['trajectory_length']} poses",
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    
+                    # Encode to JPEG
+                    _, buffer = cv2.imencode('.jpg', grid_large, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     frame_bytes = buffer.tobytes()
+                    
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
-            time.sleep(0.05)  # 20 FPS for grid
+            time.sleep(0.03)
     
     def update_stats_loop(self):
-        """Periodically update and broadcast stats"""
+        """Update statistics continuously"""
         while self.is_running:
+            # Update FPS
+            if hasattr(self.left_receiver, 'fps'):
+                self.stats['left_fps'] = self.left_receiver.fps
+            if hasattr(self.right_receiver, 'fps'):
+                self.stats['right_fps'] = self.right_receiver.fps
+            
+            # Update uptime
             if self.start_time:
-                self.stats['uptime'] = int(time.time() - self.start_time)
+                self.stats['uptime'] = time.time() - self.start_time
             
-            if self.left_receiver.is_running:
-                elapsed = time.time() - self.left_receiver.start_time
-                if elapsed > 0:
-                    self.stats['left_fps'] = float(round(self.left_receiver.frame_count / elapsed, 1))
-                    self.stats['left_frames'] = int(self.left_receiver.frame_count)
-            
-            if self.right_receiver.is_running:
-                elapsed = time.time() - self.right_receiver.start_time
-                if elapsed > 0:
-                    self.stats['right_fps'] = float(round(self.right_receiver.frame_count / elapsed, 1))
+            # Update frame counts
+            if hasattr(self.left_receiver, 'frame_count'):
+                self.stats['left_frames'] = int(self.left_receiver.frame_count)
+            if hasattr(self.right_receiver, 'frame_count'):
                     self.stats['right_frames'] = int(self.right_receiver.frame_count)
             
             # Convert all numpy types to Python types for JSON serialization
@@ -457,9 +450,42 @@ def get_status():
         })
     return jsonify({'running': False})
 
+@app.route('/api/map_data')
+def get_map_data():
+    """API trả về dữ liệu 3D Point Cloud cho Three.js"""
+    if not web_server or not web_server.persistent_map:
+        return jsonify({
+            'points': [],
+            'colors': [],
+            'robot_pose': [0, 0, 0]
+        })
+    
+    # Lấy dữ liệu điểm 3D từ PersistentMap
+    points, colors = web_server.persistent_map.get_3d_points()
+    
+    if len(points) == 0:
+        return jsonify({
+            'points': [],
+            'colors': [],
+            'robot_pose': web_server.robot_pose.tolist()
+        })
+        
+    # Giới hạn số lượng điểm để tránh lag trình duyệt
+    MAX_POINTS = 20000
+    if len(points) > MAX_POINTS:
+        indices = np.random.choice(len(points), MAX_POINTS, replace=False)
+        points = points[indices]
+        colors = colors[indices]
+
+    return jsonify({
+        'points': points.tolist(),
+        'colors': colors.tolist(),
+        'robot_pose': web_server.robot_pose.tolist()
+    })
+
 @app.route('/api/map3d')
 def get_map_3d():
-    """Get 3D map data for visualization"""
+    """Get 3D map data for visualization (alternative API)"""
     if web_server:
         map_data = web_server.persistent_map.get_map_data_for_web()
         return jsonify(map_data)
@@ -545,35 +571,6 @@ def run_web_server(host='0.0.0.0', port=5000):
     
     # Run Flask
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
-
-# --- NDK-Câph nhật map ---
-
-@app.route('/api/map_data')
-def get_map_data():
-    """API trả về dữ liệu 3D Point Cloud"""
-    if not web_server or not web_server.persistent_map:
-        return jsonify({'points': [], 'colors': []})
-    
-    # Lấy dữ liệu điểm 3D từ PersistentMap
-    # Lưu ý: get_3d_points() trả về numpy array, cần convert sang list để serialize JSON
-    points, colors = web_server.persistent_map.get_3d_points()
-    
-    if len(points) == 0:
-        return jsonify({'points': [], 'colors': []})
-        
-    # Giới hạn số lượng điểm gửi về để tránh lag trình duyệt (nếu quá nhiều)
-    # Ví dụ: chỉ lấy tối đa 20.000 điểm mới nhất hoặc random
-    MAX_POINTS = 20000
-    if len(points) > MAX_POINTS:
-        indices = np.random.choice(len(points), MAX_POINTS, replace=False)
-        points = points[indices]
-        colors = colors[indices]
-
-    return jsonify({
-        'points': points.tolist(),
-        'colors': colors.tolist(),
-        'robot_pose': web_server.robot_pose.tolist()
-    })
 
 if __name__ == '__main__':
     import argparse
