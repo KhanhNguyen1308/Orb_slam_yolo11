@@ -410,8 +410,8 @@ Examples:
     
     parser.add_argument('--server', type=str, required=True,
                        help='X99 server IP address')
-    parser.add_argument('--left-port', type=int, default=9001)
-    parser.add_argument('--right-port', type=int, default=9002)
+    parser.add_argument('--left-port', type=int, default=9002)
+    parser.add_argument('--right-port', type=int, default=9001)
     parser.add_argument('--left-camera', type=int, default=0)
     parser.add_argument('--right-camera', type=int, default=1)
     parser.add_argument('--width', type=int, default=640,

@@ -17,6 +17,7 @@ from PIL import Image
 
 from x99_headless import OptimizedCameraReceiver
 from stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+from persistent_map import PersistentMap
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'slam_web_2024'
@@ -50,6 +51,9 @@ class SLAMWebServer:
         self.grid_mapper = OccupancyGridMapper(grid_size=400, resolution=0.05, max_range=5.0)
         self.avoidance = ObstacleAvoidance(safety_distance=0.5, max_linear_vel=0.3)
         
+        # Persistent map builder
+        self.persistent_map = PersistentMap(grid_size=800, resolution=0.02, voxel_size=0.05)
+        
         self.is_running = False
         self.streaming = False
         
@@ -57,6 +61,9 @@ class SLAMWebServer:
         self.latest_depth = None
         self.latest_grid = None
         self.depth_lock = threading.Lock()
+        
+        # Robot pose estimation (simplified)
+        self.robot_pose = np.array([0.0, 0.0, 0.0])  # x, y, z
         
         # Stats
         self.stats = {
@@ -70,7 +77,9 @@ class SLAMWebServer:
             'map_points': 0,
             'obstacles_detected': 0,
             'linear_vel': 0.0,
-            'angular_vel': 0.0
+            'angular_vel': 0.0,
+            'persistent_map_points': 0,
+            'trajectory_length': 0
         }
         
         self.start_time = None
@@ -143,10 +152,14 @@ class SLAMWebServer:
             disparity = self.depth_mapper.compute_disparity(frame_left, frame_right, use_wls=False)
             depth = self.depth_mapper.disparity_to_depth(disparity)
             
-            # Update occupancy grid
+            # Create 3D point cloud
             points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left)
             
             if len(points) > 100:
+                # Add to persistent map
+                self.persistent_map.add_point_cloud(points, colors, self.robot_pose)
+                
+                # Update occupancy grid
                 self.grid_mapper.update_from_point_cloud(points)
                 self.grid_mapper.inflate_obstacles(radius=3)
                 
@@ -156,19 +169,30 @@ class SLAMWebServer:
                 # Compute avoidance velocity
                 linear_vel, angular_vel = self.avoidance.compute_velocity(scan)
                 
+                # Update robot pose (simplified - in real system use odometry/SLAM)
+                dt = 0.1  # Assume 10Hz update
+                self.robot_pose[0] += linear_vel * np.cos(self.robot_pose[2]) * dt
+                self.robot_pose[1] += 0  # Height stays same
+                self.robot_pose[2] += angular_vel * dt
+                
                 # Update stats
                 self.stats['map_points'] = len(points)
                 self.stats['obstacles_detected'] = np.sum(self.grid_mapper.grid == 100)
                 self.stats['linear_vel'] = round(linear_vel, 2)
                 self.stats['angular_vel'] = round(angular_vel, 2)
+                self.stats['persistent_map_points'] = len(self.persistent_map.voxel_grid)
+                self.stats['trajectory_length'] = len(self.persistent_map.trajectory)
             
             # Store latest depth and grid
             with self.depth_lock:
                 self.latest_depth = depth
-                self.latest_grid = self.grid_mapper.visualize()
+                # Get persistent 2D map instead of temporary one
+                self.latest_grid = self.persistent_map.visualize_2d(show_trajectory=True)
                 
         except Exception as e:
             print(f"[Web] Depth mapping error: {e}")
+            import traceback
+            traceback.print_exc()
         
         # ORB-SLAM processing
         if not self.has_slam or self.orb_extractor is None:
@@ -203,8 +227,8 @@ class SLAMWebServer:
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(frame_with_features, f"Matches: {len(matches)}", 
                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame_with_features, f"Map Points: {self.stats['map_points']}", 
-                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame_with_features, f"Map: {self.stats['persistent_map_points']} pts", 
+                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             
             return frame_with_features, len(kp_left), len(kp_right), len(matches)
             
@@ -405,6 +429,31 @@ def get_status():
             'has_slam': web_server.has_slam
         })
     return jsonify({'running': False})
+
+@app.route('/api/map3d')
+def get_map_3d():
+    """Get 3D map data for visualization"""
+    if web_server:
+        map_data = web_server.persistent_map.get_map_data_for_web()
+        return jsonify(map_data)
+    return jsonify({'error': 'not running'}), 503
+
+@app.route('/api/save_map')
+def save_map():
+    """Save current map to file"""
+    if web_server:
+        filename = f"slam_map_{int(time.time())}.npz"
+        web_server.persistent_map.save_map(filename)
+        return jsonify({'success': True, 'filename': filename})
+    return jsonify({'error': 'not running'}), 503
+
+@app.route('/api/clear_map')
+def clear_map():
+    """Clear current map"""
+    if web_server:
+        web_server.persistent_map.clear_map()
+        return jsonify({'success': True})
+    return jsonify({'error': 'not running'}), 503
 
 # SocketIO events
 @socketio.on('connect')
