@@ -536,6 +536,35 @@ def run_web_server(host='0.0.0.0', port=5000):
     # Run Flask
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
+# --- NDK-Câph nhật map ---
+
+@app.route('/api/map_data')
+def get_map_data():
+    """API trả về dữ liệu 3D Point Cloud"""
+    if not web_server or not web_server.persistent_map:
+        return jsonify({'points': [], 'colors': []})
+    
+    # Lấy dữ liệu điểm 3D từ PersistentMap
+    # Lưu ý: get_3d_points() trả về numpy array, cần convert sang list để serialize JSON
+    points, colors = web_server.persistent_map.get_3d_points()
+    
+    if len(points) == 0:
+        return jsonify({'points': [], 'colors': []})
+        
+    # Giới hạn số lượng điểm gửi về để tránh lag trình duyệt (nếu quá nhiều)
+    # Ví dụ: chỉ lấy tối đa 20.000 điểm mới nhất hoặc random
+    MAX_POINTS = 20000
+    if len(points) > MAX_POINTS:
+        indices = np.random.choice(len(points), MAX_POINTS, replace=False)
+        points = points[indices]
+        colors = colors[indices]
+
+    return jsonify({
+        'points': points.tolist(),
+        'colors': colors.tolist(),
+        'robot_pose': web_server.robot_pose.tolist()
+    })
+
 if __name__ == '__main__':
     import argparse
     
