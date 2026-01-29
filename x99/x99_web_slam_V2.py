@@ -815,7 +815,7 @@ def extract_boundaries(grid: np.ndarray) -> List[List[Tuple[int, int]]]:
     
     return boundaries
 
-def run_web_server(host='0.0.0.0', port=5000):
+def run_web_server(host='0.0.0.0', port=1234):
     """Run Flask web server"""
     global web_server
     
