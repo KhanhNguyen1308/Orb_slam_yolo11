@@ -67,8 +67,8 @@ class SLAMWebServer:
         
         # Stats
         self.stats = {
-            'left_fps': 0,
-            'right_fps': 0,
+            'left_fps': 0.0,
+            'right_fps': 0.0,
             'left_frames': 0,
             'right_frames': 0,
             'orb_features': 0,
@@ -350,17 +350,34 @@ class SLAMWebServer:
             if self.left_receiver.is_running:
                 elapsed = time.time() - self.left_receiver.start_time
                 if elapsed > 0:
-                    self.stats['left_fps'] = round(self.left_receiver.frame_count / elapsed, 1)
-                    self.stats['left_frames'] = self.left_receiver.frame_count
+                    self.stats['left_fps'] = float(round(self.left_receiver.frame_count / elapsed, 1))
+                    self.stats['left_frames'] = int(self.left_receiver.frame_count)
             
             if self.right_receiver.is_running:
                 elapsed = time.time() - self.right_receiver.start_time
                 if elapsed > 0:
-                    self.stats['right_fps'] = round(self.right_receiver.frame_count / elapsed, 1)
-                    self.stats['right_frames'] = self.right_receiver.frame_count
+                    self.stats['right_fps'] = float(round(self.right_receiver.frame_count / elapsed, 1))
+                    self.stats['right_frames'] = int(self.right_receiver.frame_count)
+            
+            # Convert all numpy types to Python types for JSON serialization
+            stats_json = {
+                'left_fps': float(self.stats['left_fps']),
+                'right_fps': float(self.stats['right_fps']),
+                'left_frames': int(self.stats['left_frames']),
+                'right_frames': int(self.stats['right_frames']),
+                'orb_features': int(self.stats['orb_features']),
+                'matches': int(self.stats['matches']),
+                'uptime': int(self.stats['uptime']),
+                'map_points': int(self.stats['map_points']),
+                'obstacles_detected': int(self.stats['obstacles_detected']),
+                'linear_vel': float(self.stats['linear_vel']),
+                'angular_vel': float(self.stats['angular_vel']),
+                'persistent_map_points': int(self.stats['persistent_map_points']),
+                'trajectory_length': int(self.stats['trajectory_length'])
+            }
             
             # Broadcast to all connected clients
-            socketio.emit('stats_update', self.stats)
+            socketio.emit('stats_update', stats_json)
             
             time.sleep(1)
 
