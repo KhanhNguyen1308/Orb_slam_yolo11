@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X99 2D Navigation Map</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #1a1a1a;
+            color: white;
+            overflow: hidden;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            background: #2a2a2a;
+            padding: 20px;
+            border-right: 2px solid #444;
+            overflow-y: auto;
+        }
+        
+        .sidebar h2 {
+            margin-bottom: 20px;
+            color: #4CAF50;
+            font-size: 20px;
+        }
+        
+        .map-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0a0a0a;
+        }
+        
+        #mapCanvas {
+            border: 2px solid #444;
+            cursor: crosshair;
+            max-width: 95%;
+            max-height: 95%;
+        }
+        
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+        }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 8px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-danger { background: #f44336; color: white; }
+        .btn-info { background: #2196F3; color: white; }
+        .btn-warning { background: #FF9800; color: white; }
+        
+        .stats {
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 2;
+        }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #333;
+            padding: 5px 0;
+        }
+        
+        .stat-label { color: #999; }
+        .stat-value { 
+            color: #4CAF50; 
+            font-weight: bold;
+        }
+        
+        .map-info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+        }
+        
+        .legend {
+            margin-top: 15px;
+            padding: 10px;
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+            font-size: 12px;
+        }
+        
+        .legend-color {
+            width: 30px;
+            height: 20px;
+            margin-right: 10px;
+            border: 1px solid #666;
+            border-radius: 3px;
+        }
+        
+        .mode-selector {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+        }
+        
+        .mode-btn {
+            flex: 1;
+            padding: 8px;
+            font-size: 11px;
+        }
+        
+        .mode-btn.active {
+            background: #4CAF50 !important;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="sidebar">
+        <h2>🗺️ NAVIGATION MAP</h2>
+        
+        <div class="controls">
+            <div class="control-label">Display Mode</div>
+            <div class="mode-selector">
+                <button class="mode-btn btn-info active" id="mode-occupancy">Occupancy</button>
+                <button class="mode-btn btn-info" id="mode-edges">Edges</button>
+                <button class="mode-btn btn-info" id="mode-path">Path</button>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="control-label">Map Controls</div>
+            <button class="btn-primary" id="btn-update">🔄 Update Map</button>
+            <button class="btn-warning" id="btn-clear">🗑️ Clear Map</button>
+            <button class="btn-info" id="btn-save">💾 Save Map</button>
+        </div>
+        
+        <div class="controls">
+            <div class="control-label">Path Planning</div>
+            <button class="btn-primary" id="btn-set-start">📍 Set Start</button>
+            <button class="btn-primary" id="btn-set-goal">🎯 Set Goal</button>
+            <button class="btn-info" id="btn-plan-path">🧭 Plan Path</button>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-row">
+                <span class="stat-label">Grid Size:</span>
+                <span class="stat-value" id="stat-grid-size">800x800</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Resolution:</span>
+                <span class="stat-value" id="stat-resolution">2cm/cell</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Free Cells:</span>
+                <span class="stat-value" id="stat-free">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Occupied:</span>
+                <span class="stat-value" id="stat-occupied">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Unknown:</span>
+                <span class="stat-value" id="stat-unknown">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Path Length:</span>
+                <span class="stat-value" id="stat-path">N/A</span>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div style="font-size: 12px; margin-bottom: 10px; color: #999;">LEGEND</div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: white;"></div>
+                <span>Free Space</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: black;"></div>
+                <span>Obstacle</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: gray;"></div>
+                <span>Unknown</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #00ff00;"></div>
+                <span>Robot Position</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff0000;"></div>
+                <span>Edges/Boundaries</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #00ffff;"></div>
+                <span>Planned Path</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="map-container">
+        <canvas id="mapCanvas"></canvas>
+        <div class="map-info">
+            <div><strong>Instructions:</strong></div>
+            <div>• Click "Set Start" then click map</div>
+            <div>• Click "Set Goal" then click map</div>
+            <div>• Click "Plan Path" to find route</div>
+            <div style="margin-top: 10px;">
+                <span id="mode-indicator">Mode: Occupancy</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const socket = io();
+    
+    // State
+    let currentMode = 'occupancy'; // occupancy, edges, path
+    let gridData = null;
+    let edgeData = null;
+    let pathData = null;
+    let startPoint = null;
+    let goalPoint = null;
+    let settingStart = false;
+    let settingGoal = false;
+    let robotPose = [0, 0, 0];
+    
+    // Canvas size
+    const CANVAS_SIZE = 800;
+    canvas.width = CANVAS_SIZE;
+    canvas.height = CANVAS_SIZE;
+    
+    // Mode switching
+    document.getElementById('mode-occupancy').addEventListener('click', () => {
+        setMode('occupancy');
+    });
+    
+    document.getElementById('mode-edges').addEventListener('click', () => {
+        setMode('edges');
+    });
+    
+    document.getElementById('mode-path').addEventListener('click', () => {
+        setMode('path');
+    });
+    
+    function setMode(mode) {
+        currentMode = mode;
+        
+        // Update button states
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        
+        if (mode === 'occupancy') {
+            document.getElementById('mode-occupancy').classList.add('active');
+            document.getElementById('mode-indicator').textContent = 'Mode: Occupancy Grid';
+        } else if (mode === 'edges') {
+            document.getElementById('mode-edges').classList.add('active');
+            document.getElementById('mode-indicator').textContent = 'Mode: Edge Detection';
+        } else if (mode === 'path') {
+            document.getElementById('mode-path').classList.add('active');
+            document.getElementById('mode-indicator').textContent = 'Mode: Path Planning';
+        }
+        
+        drawMap();
+    }
+    
+    // Fetch map data
+    async function updateMap() {
+        try {
+            const response = await fetch('/api/map_2d');
+            const data = await response.json();
+            
+            if (data.grid) {
+                gridData = data.grid;
+                robotPose = data.robot_pose || [0, 0, 0];
+                
+                // Compute edges
+                computeEdges();
+                
+                // Update stats
+                updateStats();
+                
+                // Redraw
+                drawMap();
+            }
+        } catch (e) {
+            console.error('Failed to fetch map:', e);
+        }
+    }
+    
+    function computeEdges() {
+        if (!gridData) return;
+        
+        const height = gridData.length;
+        const width = gridData[0].length;
+        edgeData = Array(height).fill(0).map(() => Array(width).fill(0));
+        
+        // Sobel edge detection
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                // Only detect edges where there's data
+                if (gridData[y][x] === -1) continue;
+                
+                // Sobel kernels
+                const gx = 
+                    -gridData[y-1][x-1] + gridData[y-1][x+1] +
+                    -2*gridData[y][x-1] + 2*gridData[y][x+1] +
+                    -gridData[y+1][x-1] + gridData[y+1][x+1];
+                
+                const gy = 
+                    -gridData[y-1][x-1] - 2*gridData[y-1][x] - gridData[y-1][x+1] +
+                    gridData[y+1][x-1] + 2*gridData[y+1][x] + gridData[y+1][x+1];
+                
+                const magnitude = Math.sqrt(gx*gx + gy*gy);
+                edgeData[y][x] = magnitude > 50 ? 1 : 0;
+            }
+        }
+    }
+    
+    function drawMap() {
+        if (!gridData) return;
+        
+        ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+        
+        const height = gridData.length;
+        const width = gridData[0].length;
+        const cellWidth = CANVAS_SIZE / width;
+        const cellHeight = CANVAS_SIZE / height;
+        
+        // Draw based on mode
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const value = gridData[y][x];
+                
+                let color;
+                if (currentMode === 'occupancy') {
+                    // Occupancy mode
+                    if (value === -1) {
+                        color = '#808080'; // Unknown = gray
+                    } else if (value === 0) {
+                        color = '#ffffff'; // Free = white
+                    } else if (value === 100) {
+                        color = '#000000'; // Occupied = black
+                    } else if (value > 0) {
+                        // Gradient for partially occupied
+                        const intensity = Math.min(value / 100, 1);
+                        const gray = Math.floor((1 - intensity) * 255);
+                        color = `rgb(${gray},${gray},${gray})`;
+                    } else {
+                        // Free space with certainty
+                        color = '#ffffff';
+                    }
+                } else if (currentMode === 'edges') {
+                    // Edge mode
+                    if (edgeData && edgeData[y][x] === 1) {
+                        color = '#ff0000'; // Edge = red
+                    } else if (value === 100) {
+                        color = '#333333'; // Occupied = dark
+                    } else if (value === 0) {
+                        color = '#ffffff'; // Free = white
+                    } else {
+                        color = '#808080'; // Unknown = gray
+                    }
+                } else if (currentMode === 'path') {
+                    // Path mode
+                    if (value === 100) {
+                        color = '#000000'; // Obstacle
+                    } else if (value === 0) {
+                        color = '#ffffff'; // Free
+                    } else {
+                        color = '#cccccc'; // Unknown
+                    }
+                }
+                
+                ctx.fillStyle = color;
+                ctx.fillRect(
+                    x * cellWidth,
+                    y * cellHeight,
+                    cellWidth,
+                    cellHeight
+                );
+            }
+        }
+        
+        // Draw path if exists
+        if (currentMode === 'path' && pathData && pathData.length > 0) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            
+            for (let i = 0; i < pathData.length; i++) {
+                const [px, py] = pathData[i];
+                const sx = (px + 0.5) * cellWidth;
+                const sy = (py + 0.5) * cellHeight;
+                
+                if (i === 0) {
+                    ctx.moveTo(sx, sy);
+                } else {
+                    ctx.lineTo(sx, sy);
+                }
+            }
+            ctx.stroke();
+            
+            // Draw waypoints
+            ctx.fillStyle = '#00ffff';
+            for (const [px, py] of pathData) {
+                ctx.beginPath();
+                ctx.arc(
+                    (px + 0.5) * cellWidth,
+                    (py + 0.5) * cellHeight,
+                    4, 0, 2 * Math.PI
+                );
+                ctx.fill();
+            }
+        }
+        
+        // Draw start point
+        if (startPoint) {
+            ctx.fillStyle = '#00ff00';
+            ctx.beginPath();
+            ctx.arc(
+                (startPoint[0] + 0.5) * cellWidth,
+                (startPoint[1] + 0.5) * cellHeight,
+                8, 0, 2 * Math.PI
+            );
+            ctx.fill();
+        }
+        
+        // Draw goal point
+        if (goalPoint) {
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(
+                (goalPoint[0] + 0.5) * cellWidth,
+                (goalPoint[1] + 0.5) * cellHeight,
+                8, 0, 2 * Math.PI
+            );
+            ctx.fill();
+        }
+        
+        // Draw robot position
+        const robotGridX = Math.floor(width / 2 + robotPose[0] / 0.02);
+        const robotGridY = Math.floor(height / 2 - robotPose[2] / 0.02);
+        
+        if (robotGridX >= 0 && robotGridX < width && robotGridY >= 0 && robotGridY < height) {
+            ctx.fillStyle = '#00ff00';
+            ctx.globalAlpha = 0.8;
+            ctx.beginPath();
+            ctx.arc(
+                (robotGridX + 0.5) * cellWidth,
+                (robotGridY + 0.5) * cellHeight,
+                12, 0, 2 * Math.PI
+            );
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+    }
+    
+    function updateStats() {
+        if (!gridData) return;
+        
+        let free = 0, occupied = 0, unknown = 0;
+        
+        for (let y = 0; y < gridData.length; y++) {
+            for (let x = 0; x < gridData[y].length; x++) {
+                if (gridData[y][x] === -1) unknown++;
+                else if (gridData[y][x] === 0) free++;
+                else if (gridData[y][x] === 100) occupied++;
+            }
+        }
+        
+        document.getElementById('stat-free').textContent = free.toLocaleString();
+        document.getElementById('stat-occupied').textContent = occupied.toLocaleString();
+        document.getElementById('stat-unknown').textContent = unknown.toLocaleString();
+    }
+    
+    // Canvas click handler
+    canvas.addEventListener('click', (e) => {
+        if (!gridData) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        const cellWidth = CANVAS_SIZE / gridData[0].length;
+        const cellHeight = CANVAS_SIZE / gridData.length;
+        
+        const gridX = Math.floor(x / cellWidth);
+        const gridY = Math.floor(y / cellHeight);
+        
+        if (settingStart) {
+            startPoint = [gridX, gridY];
+            settingStart = false;
+            drawMap();
+            console.log('Start set:', startPoint);
+        } else if (settingGoal) {
+            goalPoint = [gridX, gridY];
+            settingGoal = false;
+            drawMap();
+            console.log('Goal set:', goalPoint);
+        }
+    });
+    
+    // Button handlers
+    document.getElementById('btn-update').addEventListener('click', updateMap);
+    
+    document.getElementById('btn-clear').addEventListener('click', async () => {
+        await fetch('/api/clear_map');
+        gridData = null;
+        edgeData = null;
+        pathData = null;
+        startPoint = null;
+        goalPoint = null;
+        drawMap();
+    });
+    
+    document.getElementById('btn-save').addEventListener('click', async () => {
+        await fetch('/api/save_map');
+        alert('Map saved!');
+    });
+    
+    document.getElementById('btn-set-start').addEventListener('click', () => {
+        settingStart = true;
+        settingGoal = false;
+        alert('Click on the map to set start position');
+    });
+    
+    document.getElementById('btn-set-goal').addEventListener('click', () => {
+        settingGoal = true;
+        settingStart = false;
+        alert('Click on the map to set goal position');
+    });
+    
+    document.getElementById('btn-plan-path').addEventListener('click', async () => {
+        if (!startPoint || !goalPoint) {
+            alert('Please set both start and goal points first!');
+            return;
+        }
+        
+        try {
+            const response = await fetch('/api/plan_path', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start: startPoint,
+                    goal: goalPoint
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.path) {
+                pathData = data.path;
+                document.getElementById('stat-path').textContent = 
+                    `${pathData.length} waypoints, ${data.distance.toFixed(2)}m`;
+                setMode('path');
+                drawMap();
+            } else {
+                alert('No path found!');
+            }
+        } catch (e) {
+            console.error('Path planning failed:', e);
+            alert('Path planning failed!');
+        }
+    });
+    
+    // Auto-update every 2 seconds
+    setInterval(updateMap, 2000);
+    
+    // Initial fetch
+    setTimeout(updateMap, 500);
+</script>
+
+</body>
+</html>

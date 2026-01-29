@@ -12,14 +12,17 @@ SDA_PIN = 20
 SCL_PIN = 21
 
 # Địa chỉ I2C
-MPU_ADDR = 0x68
+ADXL_ADDR = 0x53  # ADXL345 address
 PCA_ADDR = 0x40
 
-# Cấu hình kênh Servo trên PCA9685
-CH_S1 = 0  # Trái Trước (Front Left)
-CH_S2 = 1  # Phải Trước (Front Right)
-CH_S3 = 2  # Phải Sau (Rear Right - Support S2)
-CH_S4 = 3  # Trái Sau (Rear Left - Support S1)
+# Cấu hình kênh Servo trên PCA9685 (CHỈ DÙNG 2 SERVO)
+CH_S1 = 0  # Servo 0
+CH_S2 = 1  # Servo 1
+CH_S3 = 2  # Không dùng
+CH_S4 = 3  # Không dùng
+
+# Góc lắp đặt servo (độ)
+SERVO_MECHANICAL_ANGLE = 30  # Servo lắp nghiêng 30°
 
 # Giới hạn góc Servo (Bảo vệ cơ khí)
 SERVO_MIN_ANGLE = 20
@@ -28,8 +31,8 @@ SERVO_CENTER = 90
 
 # THAM SỐ PID (Cần tinh chỉnh thực tế)
 # Kp: Độ nhạy | Ki: Cộng dồn lỗi | Kd: Chống rung
-PID_PITCH_PARAMS = {'Kp': 2.0, 'Ki': 0.0, 'Kd': 0.5} 
-PID_ROLL_PARAMS  = {'Kp': 2.0, 'Ki': 0.0, 'Kd': 0.5}
+PID_PITCH_PARAMS = {'kp': 2.0, 'ki': 0.0, 'kd': 0.5} 
+PID_ROLL_PARAMS  = {'kp': 2.0, 'ki': 0.0, 'kd': 0.5}
 
 # Tần số vòng lặp (Hz)
 LOOP_FREQ = 100 
@@ -85,45 +88,60 @@ class Servo:
         self.pca.set_pwm(self.channel, 0, duty)
 
 # ==========================================
-# 3. CLASS: MPU6050 (DRIVER IMU)
+# 3. CLASS: ADXL345 (DRIVER ACCELEROMETER)
 # ==========================================
-class MPU6050:
-    def __init__(self, i2c, addr=0x68):
+class ADXL345:
+    def __init__(self, i2c, addr=0x53):
         self.i2c = i2c
         self.addr = addr
-        self.i2c.writeto_mem(self.addr, 0x6B, b'\x00') # Wake up
-        self.angle_pitch = 0.0
-        self.angle_roll = 0.0
-        self.last_time = time.ticks_ms()
-
-    def update(self):
-        # Đọc Accelerometer và Gyroscope
-        raw = self.i2c.readfrom_mem(self.addr, 0x3B, 14)
-        vals = ustruct.unpack('>hhhhhhh', raw)
         
+        # Khởi động ADXL345
+        self.i2c.writeto_mem(self.addr, 0x2D, b'\x00')  # Reset
+        time.sleep(0.005)
+        self.i2c.writeto_mem(self.addr, 0x2D, b'\x08')  # Measure mode
+        self.i2c.writeto_mem(self.addr, 0x31, b'\x0B')  # Full resolution, ±16g, 13-bit
+        time.sleep(0.1)  # Đợi ổn định
+        
+        # Khởi tạo góc ban đầu từ accelerometer
+        raw = self.i2c.readfrom_mem(self.addr, 0x32, 6)
+        vals = ustruct.unpack('<hhh', raw)
         accX, accY, accZ = vals[0], vals[1], vals[2]
-        gyroX, gyroY = vals[4] / 131.0, vals[5] / 131.0
+        
+        # Tính góc ban đầu (chỉ dùng accelerometer)
+        acc_pitch = math.atan2(accY, accZ) * 57.2958
+        acc_roll = math.atan2(-accX, math.sqrt(accY**2 + accZ**2)) * 57.2958
+        
+        # Gán giá trị khởi tạo
+        self.angle_pitch = acc_pitch
+        self.angle_roll = -acc_roll  # Đảo chiều roll
+        
+        # ADXL345 không có gyroscope nên dùng low-pass filter
+        self.alpha = 0.1  # Hệ số lọc (0.1 = lọc mạnh, 0.9 = nhạy)
+        
+    def update(self):
+        # Đọc Accelerometer (ADXL345 chỉ có accelerometer)
+        raw = self.i2c.readfrom_mem(self.addr, 0x32, 6)
+        vals = ustruct.unpack('<hhh', raw)
+        
+        # ADXL345: 3.9mg/LSB ở ±16g, full resolution
+        # Scale factor: 3.9mg = 0.0039g
+        accX = vals[0] * 0.0039
+        accY = vals[1] * 0.0039
+        accZ = vals[2] * 0.0039
 
-        # Tính toán thời gian trôi qua (dt)
-        curr_time = time.ticks_ms()
-        dt = time.ticks_diff(curr_time, self.last_time) / 1000.0
-        self.last_time = curr_time
-
-        # Tính góc từ gia tốc (Accelerometer)
+        # Tính góc từ gia tốc
         acc_pitch = math.atan2(accY, accZ) * 57.2958
         acc_roll = math.atan2(-accX, math.sqrt(accY**2 + accZ**2)) * 57.2958
 
-        # Bộ lọc bù (Complementary Filter)
-        # Pitch: Xoay quanh trục Y (Gập bụng) -> dùng GyroY
-        # Roll: Xoay quanh trục X (Lắc hông) -> dùng GyroX
-        self.angle_pitch = 0.96 * (self.angle_pitch + gyroX * dt) + 0.04 * acc_pitch
-        self.angle_roll  = 0.96 * (self.angle_roll + gyroY * dt)  + 0.04 * acc_roll
+        # Low-pass filter (vì không có gyroscope)
+        # Công thức: angle_new = alpha * acc_angle + (1-alpha) * angle_old
+        self.angle_pitch = self.alpha * acc_pitch + (1 - self.alpha) * self.angle_pitch
+        self.angle_roll = self.alpha * (-acc_roll) + (1 - self.alpha) * self.angle_roll
 
         return self.angle_pitch, self.angle_roll
 
 # ==========================================
-# 4.
-CLASS: PID CONTROLLER
+# 4. CLASS: PID CONTROLLER
 # ==========================================
 class PID:
     def __init__(self, kp, ki, kd, setpoint=0):
@@ -149,7 +167,7 @@ class PID:
 # 5. CHƯƠNG TRÌNH CHÍNH (MAIN)
 # ==========================================
 def main():
-    print("--- KHOI TAO ROBOT 4 SERVO ---")
+    print("--- KHOI TAO ROBOT 2 SERVO (ADXL345) ---")
     
     # 1. Setup I2C
     try:
@@ -160,15 +178,16 @@ def main():
         return
 
     # 2. Setup Modules
-    mpu = MPU6050(i2c, MPU_ADDR)
+    adxl = ADXL345(i2c, ADXL_ADDR)
     pca = PCA9685(i2c, PCA_ADDR)
     pca.set_pwm_freq(50) # Servo standard 50Hz
 
-    # 3. Setup Servos
-    s1 = Servo(pca, CH_S1) # Trước Trái
-    s2 = Servo(pca, CH_S2) # Trước Phải
-    s3 = Servo(pca, CH_S3) # Sau Phải
-    s4 = Servo(pca, CH_S4) # Sau Trái
+    # 3. Setup Servos (CHỈ DÙNG 2 SERVO)
+    s0 = Servo(pca, CH_S1) # Servo 0
+    s1 = Servo(pca, CH_S2) # Servo 1
+    s2 = Servo(pca, CH_S3) # Servo 0
+    s3 = Servo(pca, CH_S4) # Servo 1
+    # Servo lắp nghiêng 30 độ
 
     # 4. Setup PID Controllers
     pid_pitch = PID(**PID_PITCH_PARAMS, setpoint=0) # Muốn giữ góc 0
@@ -184,39 +203,43 @@ def main():
             start_time = time.ticks_ms()
 
             # --- BƯỚC 1: Đọc Cảm Biến ---
-            curr_pitch, curr_roll = mpu.update()
+            curr_pitch, curr_roll = adxl.update()
 
             # --- BƯỚC 2: Tính toán PID ---
             # Output PID chính là lượng góc cần bù vào
             out_pitch = pid_pitch.compute(curr_pitch)
             out_roll  = pid_roll.compute(curr_roll)
 
-            # --- BƯỚC 3: Mixing (Trộn kênh) ---
-            # S1 (Trái Trước): Offset + Pitch + Roll
-            # S2 (Phải Trước): Offset - Pitch + Roll
-            # Lưu ý: Dấu (+) hay (-) phụ thuộc vào cơ khí thực tế. 
-            # Nếu robot phản ứng ngược, hãy đổi dấu ở đây.
+            # --- BƯỚC 3: Mixing (Trộn kênh) với bù góc lắp nghiêng 30° ---
+            # Roll: S0 và S1 cùng chiều (95,100 hoặc 85,80)
+            # Pitch: S0 và S1 ngược chiều (S0 tăng, S1 giảm)
+            # 
+            # Bù góc lắp nghiêng 30°:
+            # - Để cân bằng Roll (cúi/ngẩng), cần bù thêm 30° vào output
+            # - Công thức mixing có thể cần điều chỉnh hệ số tùy góc lắp
             
-            raw_s1 = SERVO_CENTER + out_pitch + out_roll + OFFSET_TRIM
-            raw_s2 = SERVO_CENTER - out_pitch + out_roll + OFFSET_TRIM
+            MECHANICAL_ANGLE = 30  # Góc lắp servo (độ)
+            
+            # Hệ số bù cho góc nghiêng (có thể cần tinh chỉnh)
+            # Với góc 30°: sin(30°)=0.5, cos(30°)≈0.866
+            roll_factor = 1.0 / math.cos(math.radians(MECHANICAL_ANGLE))  # ≈1.15
+            
+            # Mixing với bù góc
+            raw_s0 = SERVO_CENTER + (out_roll * roll_factor) - out_pitch + OFFSET_TRIM
+            raw_s1 = SERVO_CENTER + (out_roll * roll_factor) + out_pitch + OFFSET_TRIM
 
-            # Kẹp giá trị trong vùng an toàn trước khi tính toán servo sau
+            # Kẹp giá trị trong vùng an toàn
+            val_s0 = max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, raw_s0))
             val_s1 = max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, raw_s1))
-            val_s2 = max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, raw_s2))
 
-            # --- BƯỚC 4: Tính toán Servo Phụ (Support) ---
-            # S4 ngược pha S1 | S3 ngược pha S2
-            val_s4 = 180 - val_s1
-            val_s3 = 180 - val_s2
-
-            # --- BƯỚC 5: Điều khiển ---
+            # --- BƯỚC 4: Điều khiển chỉ 2 SERVO ---
+            s0.set_angle(val_s0)
             s1.set_angle(val_s1)
-            s2.set_angle(val_s2)
-            s3.set_angle(val_s3)
-            s4.set_angle(val_s4)
+            s3.set_angle(180-val_s1)
+            s2.set_angle(180-val_s0)
 
-            # Debug (In ra để theo dõi góc nghiêng và lệnh servo)
-            # print(f"Pitch:{curr_pitch:.1f} Roll:{curr_roll:.1f} | S1:{int(val_s1)} S4:{int(val_s4)}")
+            # Debug
+            print(f"Pitch:{curr_pitch:.1f} Roll:{curr_roll:.1f} | S0:{int(val_s0)} S1:{int(val_s1)}")
 
             # Giữ tốc độ vòng lặp ổn định
             elapsed = time.ticks_diff(time.ticks_ms(), start_time)
@@ -226,11 +249,11 @@ def main():
 
     except KeyboardInterrupt:
         print("\nDung chuong trinh!")
-        # Tắt tất cả servo (về 0 hoặc thả lỏng) để an toàn
+        # Tắt 2 servo (về 0 hoặc thả lỏng) để an toàn
         pca.set_pwm(CH_S1, 0, 0)
         pca.set_pwm(CH_S2, 0, 0)
-        pca.set_pwm(CH_S3, 0, 0)
-        pca.set_pwm(CH_S4, 0, 0)
 
-if name == "__main__":
+# ✅ SỬA LẠI: Syntax đúng
+if __name__ == "__main__":
     main()
+
