@@ -194,6 +194,16 @@ class SLAMWebServer:
             import traceback
             traceback.print_exc()
         
+        points, colors = self.depth_mapper.depth_to_point_cloud(depth, left_frame)
+
+        # 2. KIỂM TRA QUAN TRỌNG: Lưu điểm vào PersistentMap
+        # Nếu thiếu đoạn này, map sẽ luôn rỗng vì không có dữ liệu được tích lũy
+        if len(points) > 0 and self.persistent_map is not None:
+            # robot_pose hiện tại (nếu chưa có thuật toán odometry thì giả định là [0,0,0])
+            current_pose = self.robot_pose if hasattr(self, 'robot_pose') else [0, 0, 0]
+            
+            # Thêm điểm vào map
+            self.persistent_map.add_point_cloud(points, colors, current_pose)
         # ORB-SLAM processing
         if not self.has_slam or self.orb_extractor is None:
             return frame_left, 0, 0, 0
