@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Remote Control</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            max-width: 900px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 32px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .status-bar {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-around;
+        }
+        
+        .status-item {
+            text-align: center;
+        }
+        
+        .status-label {
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+        
+        .status-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        
+        .status-online { color: #4CAF50; }
+        .status-offline { color: #f44336; }
+        .status-navigating { color: #FF9800; }
+        
+        .map-container {
+            background: #000;
+            border: 2px solid #444;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            height: 500px;
+            position: relative;
+            cursor: crosshair;
+        }
+        
+        #mapCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        .map-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #f44336, #da190b);
+            color: white;
+        }
+        
+        .btn-info {
+            background: linear-gradient(135deg, #2196F3, #0b7dda);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #FF9800, #e68900);
+            color: white;
+        }
+        
+        .log-container {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+            padding-left: 10px;
+        }
+        
+        .log-error { border-left-color: #f44336; color: #ffcccc; }
+        .log-warning { border-left-color: #FF9800; color: #ffeecc; }
+        .log-info { border-left-color: #2196F3; color: #ccddff; }
+        
+        .coord-display {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🤖 ROBOT REMOTE CONTROL</h1>
+    
+    <div class="status-bar">
+        <div class="status-item">
+            <div class="status-label">X99 Server</div>
+            <div class="status-value status-offline" id="status-x99">●</div>
+        </div>
+        <div class="status-item">
+            <div class="status-label">Jetson Nav</div>
+            <div class="status-value status-offline" id="status-jetson">●</div>
+        </div>
+        <div class="status-item">
+            <div class="status-label">Pico Motors</div>
+            <div class="status-value status-offline" id="status-pico">●</div>
+        </div>
+        <div class="status-item">
+            <div class="status-label">Navigation</div>
+            <div class="status-value" id="status-nav">Idle</div>
+        </div>
+    </div>
+    
+    <div class="map-container">
+        <canvas id="mapCanvas" width="800" height="500"></canvas>
+        <div class="map-overlay">
+            <div>📍 Click on map to set goal</div>
+            <div style="margin-top: 5px;">Robot: <span id="robot-pos">(0, 0)</span></div>
+        </div>
+    </div>
+    
+    <div class="coord-display">
+        <strong>Selected Goal:</strong> 
+        <span id="goal-coords">Click on map to select</span>
+    </div>
+    
+    <div class="controls">
+        <button class="btn-primary" id="btn-go">🚀 GO TO GOAL</button>
+        <button class="btn-danger" id="btn-stop">⏹️ STOP</button>
+        <button class="btn-info" id="btn-update">🔄 UPDATE MAP</button>
+        <button class="btn-warning" id="btn-home">🏠 RETURN HOME</button>
+    </div>
+    
+    <div class="log-container" id="log"></div>
+</div>
+
+<script>
+    const socket = io();
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let gridData = null;
+    let robotPose = [0, 0, 0];
+    let selectedGoal = null;
+    let currentPath = null;
+    
+    // Logging
+    function log(message, type = 'info') {
+        const logContainer = document.getElementById('log');
+        const entry = document.createElement('div');
+        entry.className = `log-entry log-${type}`;
+        const timestamp = new Date().toLocaleTimeString();
+        entry.textContent = `[${timestamp}] ${message}`;
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+        
+        // Keep only last 50 entries
+        while (logContainer.children.length > 50) {
+            logContainer.removeChild(logContainer.children[0]);
+        }
+    }
+    
+    // Fetch map data
+    async function updateMap() {
+        try {
+            const response = await fetch('/api/map_2d');
+            const data = await response.json();
+            
+            if (data.grid) {
+                gridData = data.grid;
+                robotPose = data.robot_pose || [0, 0, 0];
+                drawMap();
+                
+                // Update robot position display
+                document.getElementById('robot-pos').textContent = 
+                    `(${robotPose[0].toFixed(2)}, ${robotPose[2].toFixed(2)})`;
+                
+                document.getElementById('status-x99').className = 'status-value status-online';
+            }
+        } catch (e) {
+            log('Failed to fetch map: ' + e.message, 'error');
+            document.getElementById('status-x99').className = 'status-value status-offline';
+        }
+    }
+    
+    // Draw map
+    function drawMap() {
+        if (!gridData) return;
+        
+        const height = gridData.length;
+        const width = gridData[0].length;
+        const cellWidth = canvas.width / width;
+        const cellHeight = canvas.height / height;
+        
+        // Draw grid
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const value = gridData[y][x];
+                
+                let color;
+                if (value === -1) color = '#808080'; // Unknown
+                else if (value === 0) color = '#ffffff'; // Free
+                else if (value === 100) color = '#000000'; // Occupied
+                else {
+                    const intensity = Math.min(value / 100, 1);
+                    const gray = Math.floor((1 - intensity) * 255);
+                    color = `rgb(${gray},${gray},${gray})`;
+                }
+                
+                ctx.fillStyle = color;
+                ctx.fillRect(
+                    x * cellWidth,
+                    y * cellHeight,
+                    cellWidth,
+                    cellHeight
+                );
+            }
+        }
+        
+        // Draw path if exists
+        if (currentPath && currentPath.length > 0) {
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            
+            for (let i = 0; i < currentPath.length; i++) {
+                const [px, py] = currentPath[i];
+                const sx = (px + 0.5) * cellWidth;
+                const sy = (py + 0.5) * cellHeight;
+                
+                if (i === 0) ctx.moveTo(sx, sy);
+                else ctx.lineTo(sx, sy);
+            }
+            ctx.stroke();
+        }
+        
+        // Draw selected goal
+        if (selectedGoal) {
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(
+                (selectedGoal[0] + 0.5) * cellWidth,
+                (selectedGoal[1] + 0.5) * cellHeight,
+                8, 0, 2 * Math.PI
+            );
+            ctx.fill();
+        }
+        
+        // Draw robot
+        const robotGridX = Math.floor(width / 2 + robotPose[0] / 0.02);
+        const robotGridY = Math.floor(height / 2 - robotPose[2] / 0.02);
+        
+        if (robotGridX >= 0 && robotGridX < width && robotGridY >= 0 && robotGridY < height) {
+            ctx.fillStyle = '#00ff00';
+            ctx.beginPath();
+            ctx.arc(
+                (robotGridX + 0.5) * cellWidth,
+                (robotGridY + 0.5) * cellHeight,
+                12, 0, 2 * Math.PI
+            );
+            ctx.fill();
+        }
+    }
+    
+    // Canvas click handler
+    canvas.addEventListener('click', (e) => {
+        if (!gridData) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        const width = gridData[0].length;
+        const height = gridData.length;
+        const cellWidth = canvas.width / width;
+        const cellHeight = canvas.height / height;
+        
+        const gridX = Math.floor(x / cellWidth);
+        const gridY = Math.floor(y / cellHeight);
+        
+        selectedGoal = [gridX, gridY];
+        document.getElementById('goal-coords').textContent = `(${gridX}, ${gridY})`;
+        
+        log(`Goal selected: (${gridX}, ${gridY})`, 'info');
+        drawMap();
+    });
+    
+    // Button handlers
+    document.getElementById('btn-go').addEventListener('click', async () => {
+        if (!selectedGoal) {
+            log('Please select a goal first!', 'warning');
+            return;
+        }
+        
+        log(`Sending navigation command to (${selectedGoal[0]}, ${selectedGoal[1]})...`, 'info');
+        document.getElementById('status-nav').textContent = 'Planning...';
+        
+        try {
+            const response = await fetch('/api/navigate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    goal: selectedGoal
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                log('Navigation started!', 'info');
+                document.getElementById('status-nav').textContent = 'Navigating';
+                document.getElementById('status-nav').className = 'status-value status-navigating';
+            } else {
+                log('Navigation failed: ' + (data.error || 'Unknown error'), 'error');
+                document.getElementById('status-nav').textContent = 'Failed';
+            }
+        } catch (e) {
+            log('Failed to send command: ' + e.message, 'error');
+        }
+    });
+    
+    document.getElementById('btn-stop').addEventListener('click', async () => {
+        log('Sending STOP command...', 'warning');
+        
+        try {
+            await fetch('/api/stop_navigation', { method: 'POST' });
+            log('Robot stopped', 'info');
+            document.getElementById('status-nav').textContent = 'Stopped';
+        } catch (e) {
+            log('Failed to stop: ' + e.message, 'error');
+        }
+    });
+    
+    document.getElementById('btn-update').addEventListener('click', () => {
+        log('Updating map...', 'info');
+        updateMap();
+    });
+    
+    document.getElementById('btn-home').addEventListener('click', async () => {
+        // Return to center (400, 400)
+        selectedGoal = [400, 400];
+        document.getElementById('goal-coords').textContent = '(400, 400) - Home';
+        log('Returning to home position...', 'info');
+        
+        // Auto-trigger navigation
+        document.getElementById('btn-go').click();
+    });
+    
+    // Socket events
+    socket.on('navigation_status', (data) => {
+        if (data.status === 'navigating') {
+            document.getElementById('status-nav').textContent = `${data.progress}%`;
+            document.getElementById('status-nav').className = 'status-value status-navigating';
+        } else if (data.status === 'reached') {
+            document.getElementById('status-nav').textContent = 'Goal Reached';
+            document.getElementById('status-nav').className = 'status-value status-online';
+            log('Goal reached!', 'info');
+        } else if (data.status === 'failed') {
+            document.getElementById('status-nav').textContent = 'Failed';
+            document.getElementById('status-nav').className = 'status-value status-offline';
+            log('Navigation failed!', 'error');
+        }
+    });
+    
+    socket.on('path_update', (data) => {
+        currentPath = data.path;
+        drawMap();
+    });
+    
+    // Auto-update map every 2 seconds
+    setInterval(updateMap, 2000);
+    
+    // Initial load
+    setTimeout(() => {
+        updateMap();
+        log('System initialized', 'info');
+    }, 500);
+</script>
+
+</body>
+</html>
