@@ -252,30 +252,36 @@ class OccupancyGridMapper:
         
         return self.grid[y_min:y_max, x_min:x_max]
     
-    def visualize(self, show_robot: bool = True) -> np.ndarray:
-        """Create visualization of occupancy grid"""
+    def visualize(self):
+        """
+        Tạo ảnh màu hiển thị bản đồ Occupancy Grid
+        Màu sắc style Robot:
+        - Xám (128): Chưa khám phá (Unknown)
+        - Trắng (255): Vùng đi được (Free)
+        - Đen (0) hoặc Đỏ: Vật cản (Occupied)
+        """
+        # Tạo ảnh nền màu xám (Unknown area)
+        vis = np.full((self.grid_size, self.grid_size, 3), 128, dtype=np.uint8)
         
-        # Create color image
-        vis = np.zeros((self.grid_size, self.grid_size, 3), dtype=np.uint8)
+        # Vùng đi được (Free) -> Màu trắng hơi ngả xanh nhạt cho dịu mắt
+        vis[self.grid == 0] = [255, 255, 250]
         
-        # Unknown = gray
-        vis[self.grid == -1] = [128, 128, 128]
+        # Vật cản (Occupied) -> Màu xanh đậm hoặc Đen
+        # Lưu ý: OpenCV dùng BGR
+        vis[self.grid == 100] = [40, 40, 40]  # Màu xám đen
         
-        # Free = white
-        vis[self.grid == 0] = [255, 255, 255]
+        # Vẽ vị trí Robot (Mũi tên màu Đỏ)
+        # Chuyển đổi tọa độ robot sang pixel
+        center = (self.robot_x, self.robot_y)
         
-        # Occupied = black
-        vis[self.grid == 100] = [0, 0, 0]
+        # Vẽ bán kính an toàn của robot
+        cv2.circle(vis, center, 6, (0, 0, 255), 1) # Vòng tròn đỏ
         
-        if show_robot:
-            # Draw robot position
-            cv2.circle(vis, (self.robot_x, self.robot_y), 5, (0, 255, 0), -1)
-            
-            # Draw robot orientation (forward = up in image)
-            cv2.arrowedLine(vis, 
-                          (self.robot_x, self.robot_y),
-                          (self.robot_x, self.robot_y - 15),
-                          (0, 255, 0), 2)
+        # Vẽ hướng robot
+        # Giả sử robot luôn hướng lên trên trong bản đồ local (hoặc xoay theo la bàn nếu có)
+        # Ở đây vẽ cố định hướng lên
+        pt2 = (self.robot_x, self.robot_y - 15)
+        cv2.arrowedLine(vis, center, pt2, (0, 0, 255), 2, tipLength=0.3)
         
         return vis
     
