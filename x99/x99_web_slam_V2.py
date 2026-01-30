@@ -897,7 +897,7 @@ def run_web_server(host='0.0.0.0', port=1234):
     global web_server
     
     # Initialize SLAM server
-    web_server = SLAMWebServer(left_port=9001, right_port=9002)
+    web_server = SLAMWebServer(left_port=9002, right_port=9001)
     
     # Start receivers
     if not web_server.start_receivers():
