@@ -19,7 +19,7 @@ import heapq
 from typing import List, Tuple, Optional
 
 from x99_headless import OptimizedCameraReceiver
-from x99.stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
 from persistent_map import PersistentMap
 
 app = Flask(__name__)
