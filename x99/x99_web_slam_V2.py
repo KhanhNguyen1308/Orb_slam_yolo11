@@ -815,7 +815,6 @@ def extract_boundaries(grid: np.ndarray) -> List[List[Tuple[int, int]]]:
     
     return boundaries
 
-
 @app.route('/api/navigate', methods=['POST'])
 def start_navigation():
     """
@@ -892,26 +891,6 @@ def robot_control():
     """Robot remote control interface"""
     return render_template('robot_control.html')
 
-JETSON_URL = "http://192.168.2.13:8000"  # Jetson IP
-
-@app.route('/api/navigate', methods=['POST'])
-def start_navigation():
-    data = request.json
-    goal = data.get('goal')
-    
-    try:
-        response = requests.post(
-            f"{JETSON_URL}/navigate",
-            json={'goal_x': goal[0], 'goal_y': goal[1]},
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            return jsonify({'success': True})
-        else:
-            return jsonify({'success': False, 'error': 'Jetson request failed'}), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 def run_web_server(host='0.0.0.0', port=1234):
     """Run Flask web server"""
