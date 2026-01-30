@@ -45,7 +45,7 @@ web_server = None
 class SLAMWebServer:
     """Web server with camera streaming and SLAM visualization"""
     
-    def __init__(self, left_port=9001, right_port=9002):
+    def __init__(self, left_port=9002, right_port=9001):
         self.left_receiver = OptimizedCameraReceiver(left_port, "LEFT")
         self.right_receiver = OptimizedCameraReceiver(right_port, "RIGHT")
         
