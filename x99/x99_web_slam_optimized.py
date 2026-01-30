@@ -31,7 +31,7 @@ try:
     print("[Info] Loaded OPTIMIZED stereo mapping module.")
 except ImportError:
     print("[Warning] Optimized mapping not found, falling back to standard...")
-    from stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+    from x99.Backup.stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
 
 from persistent_map import PersistentMap
 

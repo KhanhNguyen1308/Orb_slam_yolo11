@@ -43,7 +43,7 @@ except ImportError as e:
     print(f"  ✗ x99_headless.py: {e}")
 
 try:
-    from stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper
+    from x99.Backup.stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper
     print("  ✓ stereo_depth_mapping.py")
 except ImportError as e:
     print(f"  ✗ stereo_depth_mapping.py: {e}")

@@ -16,7 +16,7 @@ from io import BytesIO
 from PIL import Image
 
 from x99_headless import OptimizedCameraReceiver
-from stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+from x99.Backup.stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
 from persistent_map import PersistentMap
 
 app = Flask(__name__)

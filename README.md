@@ -20,7 +20,7 @@ Hệ thống SLAM với khả năng phân đoạn ngữ nghĩa (semantic segment
 
 ### X99 Workstation (cho training/processing)
 - Dual Xeon processors
-- Radeon MI50 GPU
+- Radeon MI50 GPU 16BGVRAM
 - 32GB+ RAM
 
 ## 📦 Installation
