@@ -10,6 +10,7 @@ import pickle
 import struct
 import threading
 import time
+import torch
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import queue
@@ -147,20 +148,33 @@ class ORBFeatureExtractor:
     
     def __init__(self, n_features: int = 1500):
         try:
+            if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                self.orb = cv2.cuda.ORB_create(nfeatures=n_features)
+                self.use_cuda = True
+                print("✓ Using CUDA-accelerated ORB")
+            else:
+                self.orb = cv2.ORB_create(nfeatures=n_features)
+                self.use_cuda = False
+                print("ℹ Using CPU ORB (this is OK)")
+        except:
             self.orb = cv2.ORB_create(nfeatures=n_features)
-        except TypeError:
-            try:
-                self.orb = cv2.ORB_create(nFeatures=n_features)
-            except TypeError:
-                self.orb = cv2.ORB_create()
-                self.orb.setMaxFeatures(n_features)
+            self.use_cuda = False
         
         self.bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     
     def extract_features(self, image: np.ndarray):
-        """Extract ORB keypoints and descriptors"""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        keypoints, descriptors = self.orb.detectAndCompute(gray, None)
+        if self.use_cuda:
+            try:
+                gpu_gray = cv2.cuda_GpuMat()
+                gpu_gray.upload(gray)
+                keypoints, descriptors = self.orb.detectAndCompute(gpu_gray, None)
+                if descriptors is not None:
+                    descriptors = descriptors.download()
+            except:
+                keypoints, descriptors = self.orb.detectAndCompute(gray, None)
+        else:
+            keypoints, descriptors = self.orb.detectAndCompute(gray, None)
         return keypoints, descriptors
     
     def match_features(self, desc1, desc2):
@@ -177,7 +191,6 @@ class YOLOSegmentator:
     def __init__(self, model_path: str = "yolo11m-seg.pt"):
         try:
             # Auto-detect ROCm for AMD GPU
-            import torch
             if torch.cuda.is_available():
                 device = 'cuda'
             else:
@@ -195,8 +208,20 @@ class YOLOSegmentator:
         if self.model is None:
             return None
         
-        results = self.model(image, conf=conf, device=self.device, verbose=False)
-        return results[0] if results else None
+        #results = self.model(image, conf=conf, device=self.device, verbose=False)
+        try:
+            results = self.model(
+                image,
+                conf=conf,
+                device=self.device,  # CRITICAL: Always specify device
+                verbose=False,
+                half=True,  # FP16 for faster inference on MI50
+                imgsz=640   # Fixed size for consistency
+            )
+            return results[0] if results else None
+        except Exception as e:
+            print(f" YOLO inference error: {e}")
+            return None
     
     def draw_segments(self, image: np.ndarray, results) -> np.ndarray:
         """Draw segmentation masks on image"""
