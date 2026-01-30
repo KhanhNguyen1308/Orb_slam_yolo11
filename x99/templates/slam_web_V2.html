@@ -1,256 +1,458 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>X99 ROBOTICS - SLAM COMMANDER</title>
+    <title>X99 SLAM 3D - Web Interface</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     
     <style>
-        :root {
-            --bg-color: #0f1115;
-            --panel-bg: #1a1d24;
-            --accent: #00ff88;
-            --text-main: #e0e0e0;
-            --text-dim: #8b9bb4;
-        }
-        
         body {
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
+            font-family: 'Segoe UI', sans-serif;
+            background: #121212;
+            color: white;
             margin: 0;
-            height: 100vh;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            height: 100vh;
         }
-
-        /* HEADER */
         header {
-            background-color: var(--panel-bg);
-            padding: 10px 20px;
+            background: #1e1e1e;
+            padding: 15px 25px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #333;
-            height: 50px;
+            border-bottom: 2px solid #333;
         }
-
-        .logo { font-weight: bold; font-size: 1.2em; color: var(--accent); letter-spacing: 2px; }
-        .status-badge { font-size: 0.8em; padding: 4px 10px; border-radius: 4px; background: #333; }
-        .status-ok { background: rgba(0, 255, 136, 0.2); color: var(--accent); border: 1px solid var(--accent); }
-
-        /* MAIN LAYOUT */
         .main-container {
             display: grid;
-            grid-template-columns: 350px 1fr 350px; /* Cột trái - Giữa - Cột phải */
-            grid-template-rows: 1fr 200px;
+            grid-template-columns: 350px 1fr;
+            flex-grow: 1;
             gap: 10px;
             padding: 10px;
-            height: calc(100vh - 70px);
-        }
-
-        /* PANELS */
-        .panel {
-            background: var(--panel-bg);
-            border-radius: 8px;
             overflow: hidden;
+        }
+        .sidebar {
             display: flex;
             flex-direction: column;
+            gap: 10px;
+        }
+        .camera-box {
+            background: #000;
+            border: 1px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .camera-box header { 
+            padding: 5px 10px; 
+            font-size: 12px; 
+            background: #222; 
+        }
+        .camera-box img { 
+            width: 100%; 
+            display: block; 
+            background: #000; 
+            min-height: 180px; 
+        }
+        
+        .slam-container {
+            background: #000;
+            border-radius: 12px;
             position: relative;
             border: 1px solid #333;
         }
-
-        .panel-header {
-            padding: 8px 15px;
-            font-size: 0.85em;
-            text-transform: uppercase;
-            font-weight: 600;
-            background: rgba(0,0,0,0.2);
-            color: var(--text-dim);
-            display: flex;
-            justify-content: space-between;
+        #threejs-canvas { 
+            width: 100%; 
+            height: 100%; 
+            outline: none; 
         }
-
-        /* VIDEO STREAMS */
-        .video-feed {
-            width: 100%;
-            height: 100%;
-            object-fit: contain; /* Giữ tỷ lệ ảnh */
-            background: #000;
-        }
-
-        /* 3D VIEWER */
-        #viewer3d { width: 100%; height: 100%; background: #000; }
-
-        /* STATS & LOGS */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            padding: 15px;
-        }
-        .stat-item {
-            background: rgba(0,0,0,0.3);
+        
+        .controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            z-index: 10;
+            background: rgba(0,0,0,0.8);
             padding: 10px;
-            border-radius: 4px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
         }
-        .stat-value { font-size: 1.2em; color: var(--accent); font-family: monospace; }
-        .stat-label { font-size: 0.75em; color: var(--text-dim); }
-
-        /* GRID LAYOUT ASSIGNMENTS */
-        .area-camera { grid-column: 1; grid-row: 1; }
-        .area-lidar  { grid-column: 1; grid-row: 2; } /* Map 2D ở dưới Camera */
-        .area-3d     { grid-column: 2; grid-row: 1 / span 2; } /* 3D chiếm giữa full cao */
-        .area-depth  { grid-column: 3; grid-row: 1; }
-        .area-stats  { grid-column: 3; grid-row: 2; }
-
+        button {
+            padding: 8px 15px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .btn-start { background: #2ecc71; color: white; }
+        .btn-stop { background: #e74c3c; color: white; }
+        .btn-clear { background: #f39c12; color: white; }
+        .btn-slam { background: #3498db; color: white; }
+        
+        .stats-panel {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        .status-online { color: #2ecc71; }
+        .status-offline { color: #e74c3c; }
+        .stat-value { color: #3498db; font-weight: bold; }
+        
+        .debug-panel {
+            background: #1e1e1e;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            max-height: 180px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+        }
+        .debug-panel .error { color: #e74c3c; }
+        .debug-panel .success { color: #2ecc71; }
+        .debug-panel .info { color: #3498db; }
+        .debug-panel .warning { color: #f39c12; }
+        
+        .control-group {
+            border-top: 1px solid #444;
+            padding-top: 5px;
+            margin-top: 5px;
+        }
+        .control-label {
+            font-size: 10px;
+            color: #999;
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 <body>
 
-    <header>
-        <div class="logo">X99 <span style="color:white">SLAM</span></div>
-        <div id="connection-status" class="status-badge">Connecting...</div>
-    </header>
+<header>
+    <h2>X99 3D SLAM MONITOR</h2>
+    <div id="connection-status">Đang kết nối...</div>
+</header>
 
-    <div class="main-container">
-        
-        <div class="panel area-camera">
-            <div class="panel-header">Left Camera (RGB)</div>
-            <img id="video-left" class="video-feed" src="/video/left" alt="Left Camera">
+<div class="main-container">
+    <div class="sidebar">
+        <div class="camera-box">
+            <header>LEFT CAMERA</header>
+            <img id="video-left" src="" alt="Left Stream">
         </div>
-
-        <div class="panel area-lidar">
-            <div class="panel-header">
-                <span>2D Occupancy Grid (LIDAR Mode)</span>
-                <span style="color: var(--accent)">LIVE</span>
-            </div>
-            <img id="video-grid" class="video-feed" src="/video/grid" alt="2D Map" 
-                 style="image-rendering: pixelated; transform: scaleY(-1);"> 
-                 </div>
-
-        <div class="panel area-3d">
-            <div class="panel-header">3D Point Cloud Reconstruction</div>
-            <div id="viewer3d"></div>
+        <div class="camera-box">
+            <header>RIGHT CAMERA</header>
+            <img id="video-right" src="" alt="Right Stream">
         </div>
-
-        <div class="panel area-depth">
-            <div class="panel-header">Depth Map (Heatmap)</div>
-            <img id="video-depth" class="video-feed" src="/video/depth" alt="Depth Map">
+        <div class="stats-panel">
+            <strong>Hệ thống:</strong> <span class="stat-value" id="sys-uptime">0s</span><br>
+            <strong>SLAM FPS:</strong> <span class="stat-value" id="slam-fps">0</span><br>
+            <strong>Điểm 3D:</strong> <span class="stat-value" id="point-count">0</span><br>
+            <strong>Trajectory:</strong> <span class="stat-value" id="trajectory-count">0</span><br>
+            <strong>Camera FPS:</strong> <span class="stat-value" id="fps-val">0</span>
         </div>
-
-        <div class="panel area-stats">
-            <div class="panel-header">System Telemetry</div>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-value" id="val-fps-slam">0.0</div>
-                    <div class="stat-label">SLAM FPS</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="val-fps-cam">0.0</div>
-                    <div class="stat-label">Camera FPS</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="val-points">0</div>
-                    <div class="stat-label">Map Points</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">OK</div>
-                    <div class="stat-label">YOLO GPU</div>
-                </div>
-            </div>
+        <div class="debug-panel" id="debug-console">
+            <div class="info">═══ DEBUG CONSOLE ═══</div>
         </div>
-
     </div>
 
-    <script>
-        // --- KẾT NỐI SOCKET ---
-        const socket = io();
-        const statusDiv = document.getElementById('connection-status');
+    <div class="slam-container">
+        <div class="controls">
+            <div class="control-label">VIDEO STREAM</div>
+            <button class="btn-start" id="btn-start">▶ START</button>
+            <button class="btn-stop" id="btn-stop">⏸ STOP</button>
+            
+            <div class="control-group">
+                <div class="control-label">SLAM PROCESSING</div>
+                <button class="btn-slam" id="btn-slam-start">🗺 START SLAM</button>
+                <button class="btn-stop" id="btn-slam-stop">⏸ STOP SLAM</button>
+            </div>
+            
+            <div class="control-group">
+                <div class="control-label">MAP CONTROL</div>
+                <button class="btn-clear" id="btn-clear">🗑 CLEAR MAP</button>
+            </div>
+        </div>
+        <div id="threejs-canvas"></div>
+    </div>
+</div>
 
-        socket.on('connect', () => {
-            statusDiv.innerText = "SYSTEM ONLINE";
-            statusDiv.classList.add('status-ok');
+<script>
+    const socket = io();
+    const videoLeft = document.getElementById('video-left');
+    const videoRight = document.getElementById('video-right');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const btnSlamStart = document.getElementById('btn-slam-start');
+    const btnSlamStop = document.getElementById('btn-slam-stop');
+    const btnClear = document.getElementById('btn-clear');
+    const debugConsole = document.getElementById('debug-console');
+
+    // Debug logging with colors
+    function logDebug(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const div = document.createElement('div');
+        div.className = type;
+        div.textContent = `[${timestamp}] ${message}`;
+        debugConsole.appendChild(div);
+        
+        // Keep only last 30 messages
+        while (debugConsole.children.length > 30) {
+            debugConsole.removeChild(debugConsole.children[1]);
+        }
+        
+        debugConsole.scrollTop = debugConsole.scrollHeight;
+        console.log(`[${type}] ${message}`);
+    }
+
+    // --- THREE.JS SETUP ---
+    let scene, camera, renderer, controls, pointCloud;
+    let robotMesh;
+
+    function init3D() {
+        const container = document.getElementById('threejs-canvas');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0a);
+
+        camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 5, 10);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        
+        // Grid and axes
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+        scene.add(gridHelper);
+        
+        const axesHelper = new THREE.AxesHelper(2);
+        scene.add(axesHelper);
+
+        // Robot marker
+        const robotGeo = new THREE.BoxGeometry(0.3, 0.1, 0.4);
+        const robotMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+        robotMesh = new THREE.Mesh(robotGeo, robotMat);
+        scene.add(robotMesh);
+
+        logDebug('Three.js initialized successfully', 'success');
+        animate();
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // --- MAP DATA FETCHING ---
+    let fetchAttempts = 0;
+    let lastPointCount = 0;
+
+    async function fetchMapData() {
+        try {
+            fetchAttempts++;
+            const response = await fetch('/api/map_data');
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.points && data.points.length > 0) {
+                updatePointCloud(data.points, data.colors);
+                
+                // Log significant changes
+                if (Math.abs(data.points.length - lastPointCount) > 500 || fetchAttempts === 1) {
+                    logDebug(`Map: ${data.points.length} points`, 'success');
+                    lastPointCount = data.points.length;
+                }
+                
+                document.getElementById('point-count').innerText = data.points.length.toLocaleString();
+            } else {
+                if (fetchAttempts % 5 === 0) {
+                    logDebug('Waiting for SLAM data...', 'warning');
+                }
+                document.getElementById('point-count').innerText = '0';
+            }
+            
+            if (data.robot_pose) {
+                robotMesh.position.set(data.robot_pose[0], data.robot_pose[1], data.robot_pose[2]);
+            }
+        } catch (e) {
+            if (fetchAttempts % 10 === 0) {
+                logDebug(`Map fetch error: ${e.message}`, 'error');
+            }
+        }
+    }
+
+    function updatePointCloud(points, colors) {
+        // Remove old point cloud
+        if (pointCloud) {
+            scene.remove(pointCloud);
+            pointCloud.geometry.dispose();
+            pointCloud.material.dispose();
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(points.flat());
+        const colorsNorm = new Float32Array(colors.flat().map(c => c / 255.0));
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colorsNorm, 3));
+
+        const material = new THREE.PointsMaterial({ 
+            size: 0.08, 
+            vertexColors: true,
+            sizeAttenuation: true 
         });
 
-        socket.on('disconnect', () => {
-            statusDiv.innerText = "OFFLINE";
-            statusDiv.classList.remove('status-ok');
-        });
+        pointCloud = new THREE.Points(geometry, material);
+        scene.add(pointCloud);
+    }
 
-        socket.on('stats_update', (data) => {
-            document.getElementById('val-fps-slam').innerText = (data.slam_fps || 0).toFixed(1);
-            document.getElementById('val-fps-cam').innerText = (data.left_fps || 0).toFixed(1);
-            if(data.persistent_map_points) {
-                document.getElementById('val-points').innerText = (data.persistent_map_points / 1000).toFixed(1) + "k";
+    // --- CONTROLS ---
+    function startStreaming() {
+        const t = Date.now();
+        videoLeft.src = `/video/left?t=${t}`;
+        videoRight.src = `/video/right?t=${t}`;
+        socket.emit('start_streaming');
+        logDebug('Video streaming started', 'success');
+    }
+
+    function stopStreaming() {
+        videoLeft.src = '';
+        videoRight.src = '';
+        socket.emit('stop_streaming');
+        logDebug('Video streaming stopped', 'info');
+    }
+
+    function startSlam() {
+        socket.emit('start_slam');
+        logDebug('SLAM processing started', 'success');
+    }
+
+    function stopSlam() {
+        socket.emit('stop_slam');
+        logDebug('SLAM processing stopped', 'info');
+    }
+
+    async function clearMap() {
+        try {
+            const response = await fetch('/api/clear_map');
+            const data = await response.json();
+            
+            if (data.success) {
+                logDebug('Map cleared', 'success');
+                
+                // Clear visualization
+                if (pointCloud) {
+                    scene.remove(pointCloud);
+                    pointCloud.geometry.dispose();
+                    pointCloud.material.dispose();
+                    pointCloud = null;
+                }
+                
+                document.getElementById('point-count').innerText = '0';
+                lastPointCount = 0;
+            }
+        } catch (e) {
+            logDebug(`Clear error: ${e.message}`, 'error');
+        }
+    }
+
+    // --- INITIALIZATION ---
+    window.addEventListener('load', () => {
+        init3D();
+        logDebug('Application started', 'success');
+        
+        // Fetch map data every second
+        setInterval(fetchMapData, 1000);
+    });
+
+    window.addEventListener('resize', () => {
+        const container = document.getElementById('threejs-canvas');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // Event listeners
+    btnStart.addEventListener('click', startStreaming);
+    btnStop.addEventListener('click', stopStreaming);
+    btnSlamStart.addEventListener('click', startSlam);
+    btnSlamStop.addEventListener('click', stopSlam);
+    btnClear.addEventListener('click', clearMap);
+
+    // Socket events
+    socket.on('connect', () => {
+        document.getElementById('connection-status').innerHTML = '<span class="status-online">● CONNECTED</span>';
+        logDebug('Connected to server', 'success');
+    });
+
+    socket.on('disconnect', () => {
+        document.getElementById('connection-status').innerHTML = '<span class="status-offline">● DISCONNECTED</span>';
+        logDebug('Disconnected', 'error');
+    });
+
+    socket.on('stats_update', (data) => {
+        document.getElementById('sys-uptime').innerText = Math.floor(data.uptime) + 's';
+        document.getElementById('fps-val').innerText = data.left_fps.toFixed(1);
+        document.getElementById('slam-fps').innerText = data.slam_fps.toFixed(1);
+        
+        if (data.trajectory_length !== undefined) {
+            document.getElementById('trajectory-count').innerText = data.trajectory_length;
+        }
+        
+        if (data.persistent_map_points !== undefined) {
+            document.getElementById('point-count').innerText = data.persistent_map_points.toLocaleString();
+        }
+        
+        // Log SLAM status changes
+        if (data.slam_processing !== undefined) {
+            const statusText = data.slam_processing ? 'ACTIVE' : 'STOPPED';
+            btnSlamStart.style.opacity = data.slam_processing ? '0.5' : '1';
+            btnSlamStop.style.opacity = data.slam_processing ? '1' : '0.5';
+        }
+    });
+
+    socket.on('slam_started', () => {
+        logDebug('SLAM processing activated', 'success');
+    });
+
+    socket.on('slam_stopped', () => {
+        logDebug('SLAM processing deactivated', 'warning');
+    });
+
+    // Auto-reload streams on error
+    [videoLeft, videoRight].forEach(img => {
+        img.addEventListener('error', () => {
+            if(img.src !== '') {
+                setTimeout(() => { 
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now(); 
+                }, 1000);
             }
         });
-
-        // --- CẤU HÌNH 3D THREE.JS ---
-        const init3D = () => {
-            const container = document.getElementById('viewer3d');
-            const scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000000);
-
-            // Camera 3D
-            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-            camera.position.set(0, 5, 5); // Đặt camera ở trên cao nhìn xuống
-            camera.lookAt(0, 0, 0);
-
-            const renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(container.clientWidth, container.clientHeight);
-            container.appendChild(renderer.domElement);
-
-            // Controls chuột
-            const controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-
-            // Lưới nền (Grid Helper)
-            const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
-            scene.add(gridHelper);
-            
-            // Trục tọa độ (RGB = XYZ)
-            const axesHelper = new THREE.AxesHelper(1);
-            scene.add(axesHelper);
-
-            // Robot ảo
-            const robotGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.3);
-            const robotMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
-            const robot = new THREE.Mesh(robotGeometry, robotMaterial);
-            scene.add(robot);
-
-            // Animation Loop
-            const animate = function () {
-                requestAnimationFrame(animate);
-                controls.update();
-                renderer.render(scene, camera);
-            };
-            animate();
-
-            // Resize handler
-            window.addEventListener('resize', () => {
-                camera.aspect = container.clientWidth / container.clientHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(container.clientWidth, container.clientHeight);
-            });
-        };
-
-        // Khởi chạy 3D viewer
-        init3D();
-
-        // Auto-reconnect cho ảnh nếu bị lag
-        document.querySelectorAll('img').forEach(img => {
-            img.onerror = function() {
-                setTimeout(() => {
-                    this.src = this.src.split('?')[0] + '?t=' + new Date().getTime();
-                }, 1000);
-            };
+        
+        img.addEventListener('load', () => {
+            const name = img === videoLeft ? 'Left' : 'Right';
+            logDebug(`${name} camera connected`, 'success');
         });
+    });
 
-    </script>
+    // Auto-start on load
+    setTimeout(() => {
+        logDebug('Auto-starting streams...', 'info');
+        startStreaming();
+        startSlam();
+    }, 1000);
+
+</script>
 </body>
 </html>
