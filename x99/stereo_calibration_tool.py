@@ -27,8 +27,8 @@ app = Flask(__name__)
 # ================= CẤU HÌNH =================
 CHECKERBOARD = (9, 6) # Số điểm giao nhau bên trong (Hàng, Cột)
 SQUARE_SIZE = 0.025   # Kích thước ô vuông (mét)
-LEFT_PORT = 9002
-RIGHT_PORT = 9001
+LEFT_PORT = 9001
+RIGHT_PORT = 9002
 # ============================================
 
 class WebCalibrator:
@@ -85,7 +85,13 @@ class WebCalibrator:
             # Vẽ visualization
             vis_l = frame_l.copy()
             vis_r = frame_r.copy()
-
+            cv2.putText(vis_l, "LEFT CAM (Goc Trai)", (50, 80), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+            
+            # Vẽ chữ RIGHT to đùng màu XANH
+            cv2.putText(vis_r, "RIGHT CAM (Goc Phai)", (50, 80), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 4)
+            # ===================================
             with self.lock:
                 self.valid_pair = False
                 if ret_l and ret_r:
