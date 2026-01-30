@@ -285,74 +285,666 @@ class SLAMWebServer:
         print("[SLAM] Processing thread stopped")
     
     def generate_left_stream(self):
-        while self.is_running:
+        """Generate left camera MJPEG stream"""
+        while self.is_running and self.streaming:
             if self.left_receiver.latest_frame is not None:
-                ret, buf = cv2.imencode('.jpg', self.left_receiver.latest_frame)
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.04)
-
+                frame = self.left_receiver.latest_frame.copy()
+                
+                # Add info overlay
+                cv2.putText(frame, f"LEFT CAM - FPS: {self.stats['left_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Encode to JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            time.sleep(0.03)  # ~30 FPS
+    
+    def generate_right_stream(self):
+        """Generate right camera MJPEG stream"""
+        while self.is_running and self.streaming:
+            if self.right_receiver.latest_frame is not None:
+                frame = self.right_receiver.latest_frame.copy()
+                
+                # Add info overlay
+                cv2.putText(frame, f"RIGHT CAM - FPS: {self.stats['right_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Encode to JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            time.sleep(0.03)
+    
     def generate_slam_stream(self):
-        while self.is_running:
+        """Generate SLAM-processed MJPEG stream"""
+        while self.is_running and self.streaming:
             with self.depth_lock:
                 if self.latest_slam_frame is not None:
-                    ret, buf = cv2.imencode('.jpg', self.latest_slam_frame)
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.04)
+                    frame = self.latest_slam_frame.copy()
+                    
+                    # Add info overlay
+                    cv2.putText(frame, f"SLAM - Features: {self.stats['orb_features']} Matches: {self.stats['matches']}",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    cv2.putText(frame, f"Map Points: {self.stats['persistent_map_points']}",
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    cv2.putText(frame, f"SLAM FPS: {self.stats['slam_fps']:.1f}",
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    
+                    # Encode to JPEG
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frame_bytes = buffer.tobytes()
+                    
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
+            time.sleep(0.03)
+    
     def generate_depth_stream(self):
-        while self.is_running:
+        """Generate depth map MJPEG stream"""
+        while self.is_running and self.streaming:
             with self.depth_lock:
                 if self.latest_depth is not None:
-                    depth_norm = cv2.normalize(self.latest_depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                    colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
-                    ret, buf = cv2.imencode('.jpg', colored)
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.04)
+                    # Normalize depth for visualization
+                    depth_norm = cv2.normalize(self.latest_depth, None, 0, 255, cv2.NORM_MINMAX)
+                    depth_colored = cv2.applyColorMap(depth_norm.astype(np.uint8), cv2.COLORMAP_JET)
+                    
+                    # Add info overlay
+                    cv2.putText(depth_colored, "DEPTH MAP",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    # Encode to JPEG
+                    _, buffer = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frame_bytes = buffer.tobytes()
+                    
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             
+            time.sleep(0.03)
+    
     def generate_grid_stream(self):
-        while self.is_running:
+        """Generate occupancy grid MJPEG stream"""
+        while self.is_running and self.streaming:
             with self.depth_lock:
                 if self.latest_grid is not None:
-                     ret, buf = cv2.imencode('.jpg', self.latest_grid)
-                     yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.1) # Lower FPS for grid
-
+                    # Resize for better visibility
+                    grid_large = cv2.resize(self.latest_grid, (640, 640), interpolation=cv2.INTER_NEAREST)
+                    
+                    # Add info overlay
+                    cv2.putText(grid_large, f"PERSISTENT MAP - {self.stats['persistent_map_points']} points",
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    cv2.putText(grid_large, f"Trajectory: {self.stats['trajectory_length']} poses",
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    
+                    # Encode to JPEG
+                    _, buffer = cv2.imencode('.jpg', grid_large, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    frame_bytes = buffer.tobytes()
+                    
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            time.sleep(0.03)
+    
     def update_stats_loop(self):
+        """Update statistics continuously"""
         while self.is_running:
-            # Emit stats via socketio
-            self.stats['left_fps'] = self.left_receiver.fps
-            self.stats['right_fps'] = self.right_receiver.fps
-            socketio.emit('stats_update', self.stats)
+            # Update FPS
+            if hasattr(self.left_receiver, 'fps'):
+                self.stats['left_fps'] = self.left_receiver.fps
+            if hasattr(self.right_receiver, 'fps'):
+                self.stats['right_fps'] = self.right_receiver.fps
+            
+            # Update uptime
+            if self.start_time:
+                self.stats['uptime'] = time.time() - self.start_time
+            
+            # Update frame counts
+            if hasattr(self.left_receiver, 'frame_count'):
+                self.stats['left_frames'] = int(self.left_receiver.frame_count)
+            if hasattr(self.right_receiver, 'frame_count'):
+                    self.stats['right_frames'] = int(self.right_receiver.frame_count)
+            
+            # Convert all numpy types to Python types for JSON serialization
+            stats_json = {
+                'left_fps': float(self.stats['left_fps']),
+                'right_fps': float(self.stats['right_fps']),
+                'left_frames': int(self.stats['left_frames']),
+                'right_frames': int(self.stats['right_frames']),
+                'orb_features': int(self.stats['orb_features']),
+                'matches': int(self.stats['matches']),
+                'uptime': int(self.stats['uptime']),
+                'map_points': int(self.stats['map_points']),
+                'obstacles_detected': int(self.stats['obstacles_detected']),
+                'linear_vel': float(self.stats['linear_vel']),
+                'angular_vel': float(self.stats['angular_vel']),
+                'persistent_map_points': int(self.stats['persistent_map_points']),
+                'trajectory_length': int(self.stats['trajectory_length']),
+                'slam_fps': float(self.stats['slam_fps']),
+                'slam_processing': self.slam_processing
+            }
+            
+            # Broadcast to all connected clients
+            socketio.emit('stats_update', stats_json)
+            
             time.sleep(1)
 
+# Flask routes
 @app.route('/')
 def index():
-    return "Optimized SLAM Server Running. <br><a href='/video/slam'>SLAM Stream</a> <br><a href='/video/depth'>Depth Stream</a>"
+    """Main page"""
+    return render_template('slam_web_V2.html')
 
 @app.route('/video/left')
 def video_left():
-    return Response(web_server.generate_left_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    """Left camera stream"""
+    if web_server and web_server.streaming:
+        return Response(web_server.generate_left_stream(),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+    return "Not streaming", 503
+
+@app.route('/video/right')
+def video_right():
+    """Right camera stream"""
+    if web_server and web_server.streaming:
+        return Response(web_server.generate_right_stream(),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+    return "Not streaming", 503
 
 @app.route('/video/slam')
 def video_slam():
-    return Response(web_server.generate_slam_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    """SLAM processed stream"""
+    if web_server and web_server.streaming:
+        return Response(web_server.generate_slam_stream(),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+    return "Not streaming", 503
 
 @app.route('/video/depth')
 def video_depth():
-    return Response(web_server.generate_depth_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    """Depth map stream"""
+    if web_server and web_server.streaming:
+        return Response(web_server.generate_depth_stream(),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+    return "Not streaming", 503
 
 @app.route('/video/grid')
 def video_grid():
-    return Response(web_server.generate_grid_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    """Occupancy grid stream"""
+    if web_server and web_server.streaming:
+        return Response(web_server.generate_grid_stream(),
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
+    return "Not streaming", 503
+
+@app.route('/api/stats')
+def get_stats():
+    """Get current statistics"""
+    if web_server:
+        return jsonify(web_server.stats)
+    return jsonify({'error': 'not running'}), 503
+
+@app.route('/api/status')
+def get_status():
+    """Get system status"""
+    if web_server:
+        return jsonify({
+            'running': web_server.is_running,
+            'streaming': web_server.streaming,
+            'slam_processing': web_server.slam_processing,
+            'left_connected': web_server.left_receiver.is_running,
+            'right_connected': web_server.right_receiver.is_running,
+            'has_slam': web_server.has_slam
+        })
+    return jsonify({'running': False})
+
+@app.route('/api/map_data')
+def get_map_data():
+    """API returns 3D Point Cloud data for Three.js"""
+    if not web_server or not web_server.persistent_map:
+        return jsonify({
+            'points': [],
+            'colors': [],
+            'robot_pose': [0, 0, 0]
+        })
+    
+    # Get 3D points from PersistentMap
+    points, colors = web_server.persistent_map.get_3d_points()
+    
+    if len(points) == 0:
+        return jsonify({
+            'points': [],
+            'colors': [],
+            'robot_pose': web_server.robot_pose.tolist()
+        })
+        
+    # Limit points to avoid browser lag
+    MAX_POINTS = 20000
+    if len(points) > MAX_POINTS:
+        indices = np.random.choice(len(points), MAX_POINTS, replace=False)
+        points = points[indices]
+        colors = colors[indices]
+
+    return jsonify({
+        'points': points.tolist(),
+        'colors': colors.tolist(),
+        'robot_pose': web_server.robot_pose.tolist()
+    })
+
+@app.route('/api/map3d')
+def get_map_3d():
+    """Get 3D map data for visualization (alternative API)"""
+    if web_server:
+        map_data = web_server.persistent_map.get_map_data_for_web()
+        return jsonify(map_data)
+    return jsonify({'error': 'not running'}), 503
+
+@app.route('/api/save_map')
+def save_map():
+    """Save current map to file"""
+    if web_server:
+        filename = f"slam_map_{int(time.time())}.npz"
+        web_server.persistent_map.save_map(filename)
+        return jsonify({'success': True, 'filename': filename})
+    return jsonify({'error': 'not running'}), 503
+
+@app.route('/api/clear_map')
+def clear_map():
+    """Clear current map"""
+    if web_server:
+        web_server.persistent_map.clear_map()
+        return jsonify({'success': True})
+    return jsonify({'error': 'not running'}), 503
+
+# SocketIO events
+@socketio.on('connect')
+def handle_connect():
+    """Client connected"""
+    print('[Web] Client connected')
+    emit('status', {'connected': True})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Client disconnected"""
+    print('[Web] Client disconnected')
+
+@socketio.on('start_streaming')
+def handle_start_streaming():
+    """Start video streaming"""
+    global web_server
+    
+    if web_server and not web_server.streaming:
+        web_server.streaming = True
+        emit('streaming_started', {'success': True})
+        print('[Web] Streaming started')
+
+@socketio.on('stop_streaming')
+def handle_stop_streaming():
+    """Stop video streaming"""
+    global web_server
+    
+    if web_server:
+        web_server.streaming = False
+        emit('streaming_stopped', {'success': True})
+        print('[Web] Streaming stopped')
+
+@socketio.on('start_slam')
+def handle_start_slam():
+    """Start SLAM processing"""
+    global web_server
+    
+    if web_server:
+        web_server.slam_processing = True
+        emit('slam_started', {'success': True})
+        print('[Web] SLAM processing started')
+
+@socketio.on('stop_slam')
+def handle_stop_slam():
+    """Stop SLAM processing"""
+    global web_server
+    
+    if web_server:
+        web_server.slam_processing = False
+        emit('slam_stopped', {'success': True})
+        print('[Web] SLAM processing stopped')
+
+
+@app.route('/api/map_2d')
+def get_map_2d():
+    """Get 2D occupancy grid for navigation"""
+    if not web_server or not web_server.persistent_map:
+        return jsonify({'grid': [], 'robot_pose': [0, 0, 0]})
+    
+    # Get 2D occupancy map
+    grid = web_server.persistent_map.get_2d_map(normalize=True)
+    
+    return jsonify({
+        'grid': grid.tolist(),
+        'robot_pose': web_server.robot_pose.tolist(),
+        'grid_size': grid.shape[0],
+        'resolution': web_server.persistent_map.resolution
+    })
+
+@app.route('/api/plan_path', methods=['POST'])
+def plan_path():
+    """
+    Plan path from start to goal using A*
+    POST data: {start: [x, y], goal: [x, y]}
+    """
+    if not web_server or not web_server.persistent_map:
+        return jsonify({'error': 'no map available'}), 503
+    
+    data = request.json
+    start = data.get('start')
+    goal = data.get('goal')
+    
+    if not start or not goal:
+        return jsonify({'error': 'missing start or goal'}), 400
+    
+    # Get occupancy grid
+    grid = web_server.persistent_map.get_2d_map(normalize=True)
+    
+    # Plan path
+    path = astar_path_planning(grid, tuple(start), tuple(goal))
+    
+    if path is None:
+        return jsonify({'error': 'no path found'}), 404
+    
+    # Calculate distance
+    distance = len(path) * web_server.persistent_map.resolution
+    
+    return jsonify({
+        'path': path,
+        'distance': distance,
+        'num_waypoints': len(path)
+    })
+
+def astar_path_planning(grid: np.ndarray, start: Tuple[int, int], 
+                       goal: Tuple[int, int]) -> Optional[List[Tuple[int, int]]]:
+    """
+    A* path planning on occupancy grid
+    
+    Args:
+        grid: 2D array where -1=unknown, 0=free, 100=occupied
+        start: (x, y) start position in grid coordinates
+        goal: (x, y) goal position in grid coordinates
+    
+    Returns:
+        List of (x, y) waypoints or None if no path found
+    """
+    height, width = grid.shape
+    
+    # Check if start and goal are valid
+    if not (0 <= start[0] < width and 0 <= start[1] < height):
+        print(f"Start {start} out of bounds")
+        return None
+    
+    if not (0 <= goal[0] < width and 0 <= goal[1] < height):
+        print(f"Goal {goal} out of bounds")
+        return None
+    
+    # Check if start or goal is occupied
+    if grid[start[1], start[0]] == 100:
+        print(f"Start {start} is occupied")
+        return None
+    
+    if grid[goal[1], goal[0]] == 100:
+        print(f"Goal {goal} is occupied")
+        return None
+    
+    def heuristic(a, b):
+        """Euclidean distance heuristic"""
+        return np.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
+    
+    def get_neighbors(pos):
+        """Get valid neighbors (8-directional)"""
+        x, y = pos
+        neighbors = []
+        
+        # 8 directions: N, NE, E, SE, S, SW, W, NW
+        directions = [
+            (0, -1, 1.0),   # N
+            (1, -1, 1.414), # NE
+            (1, 0, 1.0),    # E
+            (1, 1, 1.414),  # SE
+            (0, 1, 1.0),    # S
+            (-1, 1, 1.414), # SW
+            (-1, 0, 1.0),   # W
+            (-1, -1, 1.414) # NW
+        ]
+        
+        for dx, dy, cost in directions:
+            nx, ny = x + dx, y + dy
+            
+            # Check bounds
+            if 0 <= nx < width and 0 <= ny < height:
+                # Check if free or unknown (allow unknown for exploration)
+                if grid[ny, nx] != 100:  # Not occupied
+                    neighbors.append(((nx, ny), cost))
+        
+        return neighbors
+    
+    # A* algorithm
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    
+    came_from = {}
+    g_score = {start: 0}
+    f_score = {start: heuristic(start, goal)}
+    
+    closed_set = set()
+    
+    while open_set:
+        current_f, current = heapq.heappop(open_set)
+        
+        if current in closed_set:
+            continue
+        
+        closed_set.add(current)
+        
+        # Goal reached
+        if current == goal:
+            # Reconstruct path
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            path.reverse()
+            return path
+        
+        # Explore neighbors
+        for neighbor, move_cost in get_neighbors(current):
+            if neighbor in closed_set:
+                continue
+            
+            tentative_g = g_score[current] + move_cost
+            
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                f_score[neighbor] = tentative_g + heuristic(neighbor, goal)
+                heapq.heappush(open_set, (f_score[neighbor], neighbor))
+    
+    # No path found
+    return None
+
+# Also add this helper function to extract clean boundaries
+
+@app.route('/api/get_boundaries')
+def get_boundaries():
+    """Extract boundary edges from occupancy grid"""
+    if not web_server or not web_server.persistent_map:
+        return jsonify({'boundaries': []})
+    
+    grid = web_server.persistent_map.get_2d_map(normalize=True)
+    boundaries = extract_boundaries(grid)
+    
+    return jsonify({
+        'boundaries': boundaries,
+        'num_segments': len(boundaries)
+    })
+
+def extract_boundaries(grid: np.ndarray) -> List[List[Tuple[int, int]]]:
+    """
+    Extract boundary contours from occupancy grid
+    
+    Returns:
+        List of boundary segments, each segment is a list of (x, y) points
+    """
+    
+    # Create binary image: 255 for occupied, 0 for free/unknown
+    binary = np.zeros_like(grid, dtype=np.uint8)
+    binary[grid == 100] = 255
+    
+    # Find contours
+    contours, hierarchy = cv2.findContours(
+        binary, 
+        cv2.RETR_EXTERNAL, 
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    
+    # Convert contours to list of points
+    boundaries = []
+    for contour in contours:
+        if len(contour) > 10:  # Filter small contours
+            points = [(int(pt[0][0]), int(pt[0][1])) for pt in contour]
+            boundaries.append(points)
+    
+    return boundaries
+
+@app.route('/api/navigate', methods=['POST'])
+def start_navigation():
+    """
+    Start autonomous navigation to goal
+    POST data: {goal: [x, y]}
+    """
+    global navigation_process, navigation_status
+    
+    data = request.json
+    goal = data.get('goal')
+    
+    if not goal or len(goal) != 2:
+        return jsonify({'success': False, 'error': 'Invalid goal'}), 400
+    
+    goal_x, goal_y = goal
+    
+    # Stop existing navigation
+    if navigation_process and navigation_process.poll() is None:
+        navigation_process.terminate()
+        navigation_process.wait()
+    
+    # Start new navigation process on Jetson
+    # This assumes jetson_navigation.py is running on Jetson and accessible via SSH
+    # Or you can implement a REST API on Jetson and call it here
+    
+    try:
+        # Option 1: If Jetson navigation is a service, call its API
+        # import requests
+        # response = requests.post('http://jetson_ip:8000/navigate', 
+        #                          json={'goal_x': goal_x, 'goal_y': goal_y})
+        
+        # Option 2: If using SSH to trigger command
+        # navigation_process = subprocess.Popen(
+        #     ['ssh', 'jetson@jetson_ip', 
+        #      f'python3 /path/to/jetson_navigation.py g {goal_x} {goal_y}']
+        # )
+        
+        # Option 3: Store goal and let Jetson poll for it
+        navigation_status['active'] = True
+        navigation_status['goal'] = goal
+        navigation_status['progress'] = 0
+        
+        # Emit via SocketIO
+        socketio.emit('navigation_started', {'goal': goal})
+        
+        return jsonify({'success': True, 'goal': goal})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/stop_navigation', methods=['POST'])
+def stop_navigation():
+    """Stop current navigation"""
+    global navigation_process, navigation_status
+    
+    if navigation_process and navigation_process.poll() is None:
+        navigation_process.terminate()
+        navigation_process.wait()
+    
+    navigation_status['active'] = False
+    navigation_status['progress'] = 0
+    
+    socketio.emit('navigation_stopped', {})
+    
+    return jsonify({'success': True})
+
+@app.route('/api/navigation_status')
+def get_navigation_status():
+    """Get current navigation status"""
+    return jsonify(navigation_status)
+
+@app.route('/control')
+def robot_control():
+    """Robot remote control interface"""
+    return render_template('robot_control.html')
+
+
+def run_web_server(host='0.0.0.0', port=1234):
+    """Run Flask web server"""
+    global web_server
+    
+    # Initialize SLAM server
+    web_server = SLAMWebServer(left_port=9001, right_port=9002)
+    
+    # Start receivers
+    if not web_server.start_receivers():
+        print("[ERROR] Failed to start receivers")
+        return
+    
+    web_server.is_running = True
+    web_server.streaming = True  # Auto-start streaming
+    web_server.slam_processing = True  # Auto-start SLAM processing
+    web_server.start_time = time.time()
+    
+    # Start stats update thread
+    stats_thread = threading.Thread(
+        target=web_server.update_stats_loop,
+        daemon=True
+    )
+    stats_thread.start()
+    
+    # Start SLAM processing thread
+    slam_thread = threading.Thread(
+        target=web_server.slam_processing_loop,
+        daemon=True
+    )
+    slam_thread.start()
+    
+    print(f"\n{'='*70}")
+    print(f"  Web Interface Running")
+    print(f"{'='*70}")
+    print(f"Open browser: http://{host}:{port}")
+    print(f"SLAM processing: AUTO-STARTED")
+    print(f"{'='*70}\n")
+    
+    # Run Flask
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
-    web_server = SLAMWebServer()
-    web_server.is_running = True
-    web_server.slam_processing = True
+    import argparse
     
-    if web_server.start_receivers():
-        # Threads
-        threading.Thread(target=web_server.slam_processing_loop, daemon=True).start()
-        threading.Thread(target=web_server.update_stats_loop, daemon=True).start()
-        
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+    parser = argparse.ArgumentParser(description='X99 SLAM Web Interface')
+    parser.add_argument('--host', type=str, default='0.0.0.0')
+    parser.add_argument('--port', type=int, default=1234)
+    
+    args = parser.parse_args()
+    
+    try:
+        run_web_server(host=args.host, port=args.port)
+    except KeyboardInterrupt:
+        print("\n[INFO] Shutting down...")
+        if web_server:
+            web_server.is_running = False

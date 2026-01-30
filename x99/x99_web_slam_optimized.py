@@ -187,3 +187,75 @@ class SLAMWebServer:
             
             # Don't sleep if we want max FPS, but be nice to CPU
             time.sleep(0.001)
+    def generate_left_stream(self):
+        while self.is_running:
+            if self.left_receiver.latest_frame is not None:
+                ret, buf = cv2.imencode('.jpg', self.left_receiver.latest_frame)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.04)
+
+    def generate_slam_stream(self):
+        while self.is_running:
+            with self.depth_lock:
+                if self.latest_slam_frame is not None:
+                    ret, buf = cv2.imencode('.jpg', self.latest_slam_frame)
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.04)
+            
+    def generate_depth_stream(self):
+        while self.is_running:
+            with self.depth_lock:
+                if self.latest_depth is not None:
+                    depth_norm = cv2.normalize(self.latest_depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                    colored = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+                    ret, buf = cv2.imencode('.jpg', colored)
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.04)
+            
+    def generate_grid_stream(self):
+        while self.is_running:
+            with self.depth_lock:
+                if self.latest_grid is not None:
+                     ret, buf = cv2.imencode('.jpg', self.latest_grid)
+                     yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.1) # Lower FPS for grid
+
+    def update_stats_loop(self):
+        while self.is_running:
+            # Emit stats via socketio
+            self.stats['left_fps'] = self.left_receiver.fps
+            self.stats['right_fps'] = self.right_receiver.fps
+            socketio.emit('stats_update', self.stats)
+            time.sleep(1)
+
+@app.route('/')
+def index():
+    return "Optimized SLAM Server Running. <br><a href='/video/slam'>SLAM Stream</a> <br><a href='/video/depth'>Depth Stream</a>"
+
+@app.route('/video/left')
+def video_left():
+    return Response(web_server.generate_left_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video/slam')
+def video_slam():
+    return Response(web_server.generate_slam_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video/depth')
+def video_depth():
+    return Response(web_server.generate_depth_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video/grid')
+def video_grid():
+    return Response(web_server.generate_grid_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+if __name__ == '__main__':
+    web_server = SLAMWebServer()
+    web_server.is_running = True
+    web_server.slam_processing = True
+    
+    if web_server.start_receivers():
+        # Threads
+        threading.Thread(target=web_server.slam_processing_loop, daemon=True).start()
+        threading.Thread(target=web_server.update_stats_loop, daemon=True).start()
+        
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
