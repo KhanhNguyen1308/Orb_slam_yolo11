@@ -109,7 +109,7 @@ class ORBFeatureExtractor:
 class YOLOSegmentator:
     """YOLOv11m-seg for semantic segmentation"""
     
-    def __init__(self, model_path: str = "yolov11m-seg.pt", device: str = "auto"):
+    def __init__(self, model_path: str = "yolov11m-seg.pt", device: str = "cuda"):
         """
         Initialize YOLO segmentation model
         device: 'cuda', 'cpu', or 'auto'
