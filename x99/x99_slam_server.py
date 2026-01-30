@@ -145,7 +145,7 @@ class CameraReceiver:
 class ORBFeatureExtractor:
     """ORB feature extraction and matching"""
     
-    def __init__(self, n_features: int = 2000):
+    def __init__(self, n_features: int = 1500):
         try:
             self.orb = cv2.ORB_create(nfeatures=n_features)
         except TypeError:
@@ -216,7 +216,7 @@ class X99SLAMServer:
         self.right_receiver = CameraReceiver(config.right_port, "RIGHT")
         
         # SLAM components
-        self.orb_extractor = ORBFeatureExtractor(n_features=3000)
+        self.orb_extractor = ORBFeatureExtractor(n_features=1500)
         
         self.yolo = None
         if use_yolo:
