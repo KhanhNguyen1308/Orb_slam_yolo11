@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-X99 Web Interface for SLAM + Camera Streams - OPTIMIZED
-High-performance version with vectorized depth mapping and reduced overhead.
+X99 Web Interface for SLAM + Camera Streams - OPTIMIZED (FIXED)
+High-performance version with robust error handling.
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -19,8 +19,20 @@ import heapq
 from typing import List, Tuple, Optional
 
 # Import OPTIMIZED components
-from x99_headless import OptimizedCameraReceiver
-from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+try:
+    from x99_headless import OptimizedCameraReceiver
+except ImportError:
+    print("[Error] x99_headless.py not found. Make sure it is in the same directory.")
+    exit(1)
+
+# Robust import for stereo mapping
+try:
+    from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+    print("[Info] Loaded OPTIMIZED stereo mapping module.")
+except ImportError:
+    print("[Warning] Optimized mapping not found, falling back to standard...")
+    from stereo_depth_mapping import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+
 from persistent_map import PersistentMap
 
 app = Flask(__name__)
@@ -40,7 +52,7 @@ class SLAMWebServer:
         # SLAM components
         try:
             from x99_slam_server import ORBFeatureExtractor, YOLOSegmentator
-            self.orb_extractor = ORBFeatureExtractor(n_features=1000) # Reduced features
+            self.orb_extractor = ORBFeatureExtractor(n_features=1000)
             self.yolo = YOLOSegmentator()
             self.has_slam = True
             print("[Web] SLAM components loaded (YOLO + ORB)")
@@ -50,7 +62,7 @@ class SLAMWebServer:
             self.yolo = None
             self.has_slam = False
         
-        # Depth mapping components (Optimized)
+        # Depth mapping components
         self.depth_mapper = StereoDepthMapper(baseline=0.01, focal_length=500)
         self.grid_mapper = OccupancyGridMapper(grid_size=400, resolution=0.05, max_range=5.0)
         self.avoidance = ObstacleAvoidance(safety_distance=0.5, max_linear_vel=0.3)
@@ -82,6 +94,14 @@ class SLAMWebServer:
         self.start_time = None
         self.last_slam_time = time.time()
         self.slam_frame_count = 0
+
+        # Check if optimization is available in the loaded class
+        self.use_step_optimization = hasattr(self.depth_mapper.depth_to_point_cloud, '__code__') and \
+                                     'step' in self.depth_mapper.depth_to_point_cloud.__code__.co_varnames
+        if self.use_step_optimization:
+            print("[Info] Vectorized point cloud generation ENABLED.")
+        else:
+            print("[Warning] Legacy point cloud generation detected. Update stereo_depth_mapping_optimized.py for better FPS.")
     
     def start_receivers(self):
         """Start camera receivers"""
@@ -101,20 +121,26 @@ class SLAMWebServer:
     def process_slam_frame(self, frame_left, frame_right):
         """Process a single stereo frame for SLAM"""
         
-        # 1. Compute depth map (FAST MODE)
-        # Disable WLS filter for speed
-        disparity = self.depth_mapper.compute_disparity(frame_left, frame_right, use_wls=False)
+        # 1. Compute depth map
+        # Handle method signature difference for compute_disparity
+        try:
+             disparity = self.depth_mapper.compute_disparity(frame_left, frame_right, use_wls=False)
+        except TypeError:
+             # Fallback for old class
+             disparity = self.depth_mapper.compute_disparity(frame_left, frame_right)
+
         depth = self.depth_mapper.disparity_to_depth(disparity)
         
-        # 2. Create 3D point cloud (VECTORIZED)
-        # step=4 reduces points by 16x, massive speedup
-        points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left, step=4)
+        # 2. Create 3D point cloud
+        # Use 'step' only if available (Fixes TypeError)
+        if self.use_step_optimization:
+            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left, step=4)
+        else:
+            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left)
         
         # 3. Persistent Map Update
-        # Only add to map if we have points and not too frequently
-        # (This is still the bottleneck as PersistentMap is Python-heavy)
         if len(points) > 0:
-             # Subsample heavily before sending to PersistentMap
+             # Subsample heavily before sending to PersistentMap (CPU heavy)
              if len(points) > 2000:
                  indices = np.random.choice(len(points), 2000, replace=False)
                  points_small = points[indices]
@@ -126,7 +152,7 @@ class SLAMWebServer:
              self.persistent_map.add_point_cloud(points_small, colors_small, self.robot_pose)
              
              # Update local occupancy grid
-             self.grid_mapper.update_from_point_cloud(points) # Use full points for local safety
+             self.grid_mapper.update_from_point_cloud(points)
              self.grid_mapper.inflate_obstacles(radius=2)
              
              # Avoidance
@@ -137,13 +163,10 @@ class SLAMWebServer:
         processed_frame = frame_left.copy()
         if self.has_slam and self.orb_extractor:
             try:
-                # Limit features to keep FPS high
                 kp1, des1 = self.orb_extractor.extract_features(frame_left)
-                # kp2, des2 = self.orb_extractor.extract_features(frame_right) # Skip right for speed
                 
-                # YOLO (Check if model exists)
+                # YOLO - Run less frequently
                 if self.yolo and self.yolo.model:
-                     # Only run YOLO every 5th frame to save GPU/CPU transfer time
                      if self.slam_frame_count % 5 == 0:
                          results = self.yolo.segment(frame_left, conf=0.5)
                          if results:
@@ -158,13 +181,13 @@ class SLAMWebServer:
         with self.depth_lock:
             self.latest_depth = depth
             self.latest_slam_frame = processed_frame
-            # Only update grid visualization occasionally
+            # Render grid less frequently to save FPS
             if self.slam_frame_count % 5 == 0:
                 self.latest_grid = self.persistent_map.visualize_2d(show_trajectory=True)
 
     def slam_processing_loop(self):
         """Background SLAM loop"""
-        print("[SLAM] Optimized processing loop started")
+        print("[SLAM] Processing loop started")
         while self.is_running:
             if not self.slam_processing:
                 time.sleep(0.1)
@@ -175,18 +198,24 @@ class SLAMWebServer:
             
             if frame_left is not None and frame_right is not None:
                 start_t = time.time()
-                self.process_slam_frame(frame_left, frame_right)
+                try:
+                    self.process_slam_frame(frame_left, frame_right)
+                except Exception as e:
+                    print(f"[SLAM Error] {e}")
+                    import traceback
+                    traceback.print_exc()
+                
                 dt = time.time() - start_t
                 
                 # Update FPS
                 self.slam_frame_count += 1
                 if dt > 0:
                     current_fps = 1.0 / dt
-                    # Smooth FPS
                     self.stats['slam_fps'] = 0.9 * self.stats['slam_fps'] + 0.1 * current_fps
             
-            # Don't sleep if we want max FPS, but be nice to CPU
             time.sleep(0.001)
+
+    # Generators
     def generate_left_stream(self):
         while self.is_running:
             if self.left_receiver.latest_frame is not None:
@@ -218,13 +247,20 @@ class SLAMWebServer:
                 if self.latest_grid is not None:
                      ret, buf = cv2.imencode('.jpg', self.latest_grid)
                      yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.1) # Lower FPS for grid
+            time.sleep(0.1)
 
     def update_stats_loop(self):
         while self.is_running:
-            # Emit stats via socketio
-            self.stats['left_fps'] = self.left_receiver.fps
-            self.stats['right_fps'] = self.right_receiver.fps
+            # FIX: Robustly get FPS (handle missing attribute)
+            left_fps = getattr(self.left_receiver, 'fps', 0)
+            right_fps = getattr(self.right_receiver, 'fps', 0)
+            
+            # If fps is 0, try to calculate from history if available
+            if left_fps == 0 and hasattr(self.left_receiver, 'fps_history') and len(self.left_receiver.fps_history) > 0:
+                 left_fps = sum(self.left_receiver.fps_history) / len(self.left_receiver.fps_history)
+
+            self.stats['left_fps'] = left_fps
+            self.stats['right_fps'] = right_fps
             socketio.emit('stats_update', self.stats)
             time.sleep(1)
 
