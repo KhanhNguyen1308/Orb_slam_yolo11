@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-X99 Web SLAM Interface - IMPROVED with Full Pose Tracking
-Headless server with web-based visualization
+X99 Web SLAM Interface - FIXED VERSION
+Fixes the frame receiving issue (invalid load key error)
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -44,12 +44,10 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 web_server = None
 
 class CameraReceiver:
-    """Simple camera receiver for web interface"""
+    """Simple camera receiver for web interface - FIXED VERSION"""
     
     def __init__(self, port: int, name: str):
         import socket
-        import struct
-        import pickle
         import queue
         
         self.port = port
@@ -77,41 +75,54 @@ class CameraReceiver:
             return False
     
     def receive_frames(self):
-        """Receive frames from client"""
+        """
+        Receive frames from client - FIXED VERSION
+        
+        FIX: Client sends raw JPEG bytes, not pickled data!
+        Format: [4 bytes size (network order)][JPEG data]
+        """
         import struct
-        import pickle
         import queue
         
         self.is_running = True
         data = b""
-        payload_size = struct.calcsize("!L")
+        payload_size = struct.calcsize("!I")  # 4 bytes, unsigned int, network order
         
         try:
             while self.is_running:
-                # Receive message size
+                # Receive message size (4 bytes)
                 while len(data) < payload_size:
                     packet = self.client_socket.recv(4096)
                     if not packet:
+                        print(f"[{self.name}] Connection closed by client")
                         return
                     data += packet
                 
                 packed_msg_size = data[:payload_size]
                 data = data[payload_size:]
-                msg_size = struct.unpack("!L", packed_msg_size)[0]
+                msg_size = struct.unpack("!I", packed_msg_size)[0]
                 
                 # Receive frame data
                 while len(data) < msg_size:
                     packet = self.client_socket.recv(4096)
                     if not packet:
+                        print(f"[{self.name}] Connection closed while receiving frame")
                         return
                     data += packet
                 
                 frame_data = data[:msg_size]
                 data = data[msg_size:]
                 
-                # Deserialize
-                encoded_frame = pickle.loads(frame_data)
-                frame = cv2.imdecode(encoded_frame, cv2.IMREAD_COLOR)
+                # ====== FIX: Decode JPEG directly from bytes ======
+                # Convert bytes to numpy array
+                frame_array = np.frombuffer(frame_data, dtype=np.uint8)
+                
+                # Decode JPEG
+                frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+                
+                if frame is None:
+                    print(f"[{self.name}] Failed to decode frame (size: {msg_size} bytes)")
+                    continue
                 
                 # Add to queue
                 if self.frame_queue.full():
@@ -124,6 +135,8 @@ class CameraReceiver:
                 
         except Exception as e:
             print(f"[{self.name}] Receive error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.cleanup()
     
@@ -236,7 +249,7 @@ class WebSLAMServer:
     def start_receivers(self):
         """Start camera receivers"""
         print("\n" + "=" * 70)
-        print("  X99 Web SLAM - Improved with Full Tracking")
+        print("  X99 Web SLAM - FIXED VERSION")
         print("=" * 70)
         
         # Show IPs
@@ -290,7 +303,7 @@ class WebSLAMServer:
             print("\n[ERROR] Camera connection timeout")
             return False
         
-        print("\n[OK] Cameras connected!\n")
+        print("\n[OK] Cameras connected and receiving frames!\n")
         return True
     
     def process_slam_frame(self, frame_left, frame_right):
@@ -626,7 +639,7 @@ def run_web_server(host='0.0.0.0', port=1234, calibration_file=None):
         t.start()
     
     print(f"\n{'='*70}")
-    print(f"  Web Interface Running with FULL SLAM Tracking")
+    print(f"  Web Interface Running - FIXED VERSION")
     print(f"{'='*70}")
     print(f"Open browser: http://{host}:{port}")
     print(f"SLAM: AUTO-STARTED with pose estimation")
@@ -638,7 +651,7 @@ def run_web_server(host='0.0.0.0', port=1234, calibration_file=None):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='X99 Web SLAM - Improved')
+    parser = argparse.ArgumentParser(description='X99 Web SLAM - Fixed Version')
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=1234)
     parser.add_argument('--calibration', type=str, default='calibration_params.npz')
