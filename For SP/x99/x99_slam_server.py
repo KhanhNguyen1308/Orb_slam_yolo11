@@ -146,7 +146,7 @@ class CameraReceiver:
 class ORBFeatureExtractor:
     """ORB feature extraction and matching"""
     
-    def __init__(self, n_features: int = 800):
+    def __init__(self, n_features: int = 1500):
         try:
             if cv2.cuda.getCudaEnabledDeviceCount() > 0:
                 self.orb = cv2.cuda.ORB_create(nfeatures=n_features)
@@ -241,7 +241,7 @@ class X99SLAMServer:
         self.right_receiver = CameraReceiver(config.right_port, "RIGHT")
         
         # SLAM components
-        self.orb_extractor = ORBFeatureExtractor(n_features=800)
+        self.orb_extractor = ORBFeatureExtractor(n_features=1500)
         
         self.yolo = None
         if use_yolo:
@@ -304,7 +304,7 @@ class X99SLAMServer:
         # YOLO segmentation on left frame
         processed_frame = frame_left.copy()
         if self.yolo:
-            yolo_results = self.yolo.segment(frame_left, conf=0.8)
+            yolo_results = self.yolo.segment(frame_left, conf=0.5)
             processed_frame = self.yolo.draw_segments(frame_left, yolo_results)
         
         # Draw ORB features
@@ -387,9 +387,9 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='X99 SLAM Server')
-    parser.add_argument('--left-port', type=int, default=9002,
+    parser.add_argument('--left-port', type=int, default=9001,
                        help='Left camera receive port')
-    parser.add_argument('--right-port', type=int, default=9001,
+    parser.add_argument('--right-port', type=int, default=9002,
                        help='Right camera receive port')
     parser.add_argument('--no-yolo', action='store_true',
                        help='Disable YOLO segmentation')
