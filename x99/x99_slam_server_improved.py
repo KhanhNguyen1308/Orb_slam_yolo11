@@ -945,9 +945,9 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='X99 SLAM Server with Navigation')
-    parser.add_argument('--left-port', type=int, default=9001,
+    parser.add_argument('--left-port', type=int, default=9002,
                        help='Left camera receive port')
-    parser.add_argument('--right-port', type=int, default=9002,
+    parser.add_argument('--right-port', type=int, default=9001,
                        help='Right camera receive port')
     parser.add_argument('--no-yolo', action='store_true',
                        help='Disable YOLO segmentation')
