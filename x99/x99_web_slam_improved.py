@@ -507,7 +507,7 @@ class WebSLAMServer:
 @app.route('/')
 def index():
     """Main dashboard"""
-    return render_template('index.html')
+    return render_template('index_improved.html')
 
 @app.route('/video_feed/<feed>')
 def video_feed(feed):
