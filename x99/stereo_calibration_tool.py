@@ -27,8 +27,8 @@ app = Flask(__name__)
 # ================= CẤU HÌNH =================
 CHECKERBOARD = (9, 6) # Số điểm giao nhau bên trong (Hàng, Cột)
 SQUARE_SIZE = 0.024   # Kích thước ô vuông (mét)
-LEFT_PORT = 9001
-RIGHT_PORT = 9002
+LEFT_PORT = 9002
+RIGHT_PORT = 9001
 # ============================================
 
 class WebCalibrator:
