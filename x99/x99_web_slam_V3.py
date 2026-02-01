@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-X99 Web Interface V3 - FIXED GRAYSCALE ISSUE
-=============================================
-FIX: Camera streaming preserves color (không còn bị xám)
+X99 Web Interface V3 - FINAL FIX
+=================================
+FIX: Stream directly from receiver (like V2) to avoid overexposure issues
+The problem was using SLAM-processed frames which had aggressive corrections
 
-Issue: compute_disparity() converts to grayscale internally but doesn't
-affect the original frames. The problem is we were using the processed
-grayscale frames for display.
-
-Solution: Keep original color frames separate from SLAM processing.
+Solution: Stream RAW frames from receiver, process SLAM separately
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -18,15 +15,9 @@ import numpy as np
 import json
 import threading
 import time
-import base64
-from io import BytesIO
-from PIL import Image
-
-import heapq
-from typing import List, Tuple, Optional
 
 from x99_headless import OptimizedCameraReceiver
-from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
+from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper
 from persistent_map import PersistentMap
 
 app = Flask(__name__)
@@ -36,7 +27,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 web_server = None
 
 class SLAMWebServer:
-    """Web server with FIXED color preservation"""
+    """Web server - Fixed to stream RAW frames"""
     
     def __init__(self, left_port=9001, right_port=9002):
         self.left_receiver = OptimizedCameraReceiver(left_port, "LEFT")
@@ -64,9 +55,7 @@ class SLAMWebServer:
         self.streaming = False
         self.slam_processing = False
         
-        # CRITICAL FIX: Store COLOR frames separately from SLAM processing
-        self.latest_color_left = None   # NEW: Original color frame
-        self.latest_color_right = None  # NEW: Original color frame
+        # Latest SLAM outputs (NOT used for video streaming)
         self.latest_depth = None
         self.latest_grid = None
         self.latest_grid_2d = None
@@ -89,8 +78,6 @@ class SLAMWebServer:
             'uptime': 0,
             'map_points': 0,
             'obstacles_detected': 0,
-            'linear_vel': 0.0,
-            'angular_vel': 0.0,
             'persistent_map_points': 0,
             'trajectory_length': 0,
             'slam_fps': 0.0,
@@ -104,12 +91,12 @@ class SLAMWebServer:
         
         print("\n[INIT] Camera height: 50cm, Baseline: 10cm")
         print("[INIT] Robot pose LOCKED (no drift)")
-        print("[FIX] Color frames preserved separately")
+        print("[FIX] Stream RAW frames (like V2) - No processing artifacts")
     
     def start_receivers(self):
         """Start camera receivers"""
         print("\n" + "=" * 70)
-        print("  X99 SLAM V3 - GRAYSCALE ISSUE FIXED")
+        print("  X99 SLAM V3 - FINAL FIX (Stream RAW)")
         print("=" * 70)
         
         import subprocess
@@ -163,24 +150,13 @@ class SLAMWebServer:
         print("\n[OK] Cameras connected!\n")
         return True
     
-    def process_slam_frame(self, frame_left_color, frame_right_color):
-        """
-        Process stereo frame for SLAM
-        CRITICAL: Work on COPIES, preserve original color frames
-        """
-        
-        # CRITICAL FIX: Make copies for SLAM processing
-        # Original color frames stay untouched
-        frame_left = frame_left_color.copy()
-        frame_right = frame_right_color.copy()
+    def process_slam_frame(self, frame_left, frame_right):
+        """Process stereo frame for SLAM (separate from video streaming)"""
         
         try:
-            # Compute depth (internally converts to gray, but doesn't affect our copies)
             disparity = self.depth_mapper.compute_disparity(frame_left, frame_right, use_wls=False)
             depth = self.depth_mapper.disparity_to_depth(disparity)
-            
-            # Use ORIGINAL COLOR frame for point cloud colors
-            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left_color)
+            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left)
             
             if len(points) > 100:
                 points_world = points.copy()
@@ -196,8 +172,6 @@ class SLAMWebServer:
                 points_valid = points_world[valid_mask]
                 colors_valid = colors[valid_mask] if colors is not None else None
                 
-                print(f"[SLAM] {len(points)} raw → {len(points_valid)} filtered points")
-                
                 if len(points_valid) > 50:
                     self.persistent_map.add_point_cloud(points_valid, colors_valid, self.robot_pose)
                     self.grid_mapper.update_from_point_cloud(points_valid)
@@ -212,8 +186,6 @@ class SLAMWebServer:
                     self.stats['trajectory_length'] = len(self.persistent_map.trajectory)
                     self.stats['grid_2d_obstacles'] = obstacles
                     self.stats['grid_2d_free'] = free_space
-                    
-                    print(f"[GRID] Obstacles: {obstacles}, Free: {free_space}")
                 
                 with self.depth_lock:
                     self.latest_depth = depth
@@ -222,16 +194,14 @@ class SLAMWebServer:
                     
         except Exception as e:
             print(f"[SLAM] Error: {e}")
-            import traceback
-            traceback.print_exc()
         
-        # ORB features - work on COLOR frame copy
-        processed_frame = frame_left_color.copy()
+        # ORB features
+        processed_frame = frame_left.copy()
         
         if self.has_slam and self.orb_extractor is not None:
             try:
-                kp_left, desc_left = self.orb_extractor.extract_features(frame_left_color)
-                kp_right, desc_right = self.orb_extractor.extract_features(frame_right_color)
+                kp_left, desc_left = self.orb_extractor.extract_features(frame_left)
+                kp_right, desc_right = self.orb_extractor.extract_features(frame_right)
                 matches = self.orb_extractor.match_features(desc_left, desc_right)
                 
                 processed_frame = cv2.drawKeypoints(
@@ -258,17 +228,10 @@ class SLAMWebServer:
                 time.sleep(0.1)
                 continue
             
-            # CRITICAL FIX: Get color frames, store them, then process
             frame_left = self.left_receiver.get_latest_frame()
             frame_right = self.right_receiver.get_latest_frame()
             
             if frame_left is not None and frame_right is not None:
-                # Store original COLOR frames
-                with self.depth_lock:
-                    self.latest_color_left = frame_left.copy()
-                    self.latest_color_right = frame_right.copy()
-                
-                # Process SLAM (works on copies)
                 self.process_slam_frame(frame_left, frame_right)
                 
                 self.slam_frame_count += 1
@@ -285,46 +248,33 @@ class SLAMWebServer:
         print("[SLAM] Processing thread stopped")
     
     def generate_left_stream(self):
-        """Generate LEFT camera stream - USE ORIGINAL COLOR"""
+        """Generate LEFT camera - DIRECT from receiver (like V2)"""
         while self.is_running and self.streaming:
-            # CRITICAL FIX: Use stored color frame, NOT receiver frame
-            with self.depth_lock:
-                if self.latest_color_left is not None:
-                    frame = self.latest_color_left.copy()
-                else:
-                    # Fallback to receiver if color not yet stored
-                    frame = self.left_receiver.get_latest_frame()
-                    if frame is None:
-                        time.sleep(0.03)
-                        continue
-            
-            cv2.putText(frame, f"LEFT - FPS: {self.stats['left_fps']:.1f}",
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            # FIX: Use receiver.latest_frame directly (NO processing)
+            if self.left_receiver.latest_frame is not None:
+                frame = self.left_receiver.latest_frame.copy()
+                
+                cv2.putText(frame, f"LEFT - FPS: {self.stats['left_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
             time.sleep(0.03)
     
     def generate_right_stream(self):
-        """Generate RIGHT camera stream - USE ORIGINAL COLOR"""
+        """Generate RIGHT camera - DIRECT from receiver (like V2)"""
         while self.is_running and self.streaming:
-            with self.depth_lock:
-                if self.latest_color_right is not None:
-                    frame = self.latest_color_right.copy()
-                else:
-                    frame = self.right_receiver.get_latest_frame()
-                    if frame is None:
-                        time.sleep(0.03)
-                        continue
-            
-            cv2.putText(frame, f"RIGHT - FPS: {self.stats['right_fps']:.1f}",
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            if self.right_receiver.latest_frame is not None:
+                frame = self.right_receiver.latest_frame.copy()
+                
+                cv2.putText(frame, f"RIGHT - FPS: {self.stats['right_fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
             time.sleep(0.03)
     
@@ -339,8 +289,6 @@ class SLAMWebServer:
                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(frame, f"Map: {self.stats['persistent_map_points']} pts",
                                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                    cv2.putText(frame, f"FPS: {self.stats['slam_fps']:.1f}",
-                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
                     _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     yield (b'--frame\r\n'
@@ -422,7 +370,7 @@ class SLAMWebServer:
             socketio.emit('stats_update', stats_json)
             time.sleep(1)
 
-# Flask routes (unchanged)
+# Flask routes (same as before)
 @app.route('/')
 def index():
     return render_template('slam_web_V3.html')
@@ -624,10 +572,10 @@ def run_web_server(host='0.0.0.0', port=1234):
     slam_thread.start()
     
     print(f"\n{'='*70}")
-    print(f"  Web Interface V3 - GRAYSCALE FIXED")
+    print(f"  Web Interface V3 - FINAL FIX")
     print(f"{'='*70}")
     print(f"URL: http://{host}:{port}")
-    print(f"Color preservation: ENABLED")
+    print(f"Streaming: RAW frames (no processing artifacts)")
     print(f"{'='*70}\n")
     
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
@@ -635,7 +583,7 @@ def run_web_server(host='0.0.0.0', port=1234):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='X99 SLAM V3 - Grayscale Fixed')
+    parser = argparse.ArgumentParser(description='X99 SLAM V3 - Final Fix')
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=1234)
     
