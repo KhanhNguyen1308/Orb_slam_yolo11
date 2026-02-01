@@ -106,6 +106,8 @@ class OptimizedCameraStreamer:
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.cap.set(cv2.CAP_PROP_FPS, self.config.fps)
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.cap.set(cv2.CAP_PROP_FORMAT, cv2.CV_8UC3)
+                self.cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
             
             # ===== CRITICAL: SET MANUAL EXPOSURE =====
             print(f"[CAM{self.camera_id}] Configuring exposure control...")
