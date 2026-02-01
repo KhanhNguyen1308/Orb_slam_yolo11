@@ -39,7 +39,7 @@ class SLAMWebServer:
         
         # SLAM components
         try:
-            from x99_slam_server import ORBFeatureExtractor, YOLOSegmentator
+            from x99_slam_server_improved import ORBFeatureExtractor, YOLOSegmentator
             self.orb_extractor = ORBFeatureExtractor(n_features=800)
             self.yolo = YOLOSegmentator()
             self.has_slam = True
