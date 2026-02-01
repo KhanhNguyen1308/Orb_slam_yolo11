@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-X99 Web SLAM Interface - FIXED VERSION
-Fixes the frame receiving issue (invalid load key error)
+X99 Web SLAM Interface - IMPROVED with Full Pose Tracking
+Headless server with web-based visualization
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -29,6 +29,17 @@ except ImportError:
 from stereo_depth_mapping_optimized import StereoDepthMapper, OccupancyGridMapper, ObstacleAvoidance
 from persistent_map import PersistentMap
 
+# Import semantic filtering (NEW!)
+try:
+    from semantic_filtering import SemanticFilter, SemanticOccupancyGrid
+    SEMANTIC_AVAILABLE = True
+    print("[Web] Semantic filtering enabled")
+except ImportError:
+    print("[Warning] semantic_filtering not found")
+    SEMANTIC_AVAILABLE = False
+    SemanticFilter = None
+    SemanticOccupancyGrid = None
+
 try:
     from path_planning import PathPlanner
     PATH_PLANNING_AVAILABLE = True
@@ -44,10 +55,12 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 web_server = None
 
 class CameraReceiver:
-    """Simple camera receiver for web interface - FIXED VERSION"""
+    """Simple camera receiver for web interface"""
     
     def __init__(self, port: int, name: str):
         import socket
+        import struct
+        import pickle
         import queue
         
         self.port = port
@@ -75,54 +88,41 @@ class CameraReceiver:
             return False
     
     def receive_frames(self):
-        """
-        Receive frames from client - FIXED VERSION
-        
-        FIX: Client sends raw JPEG bytes, not pickled data!
-        Format: [4 bytes size (network order)][JPEG data]
-        """
+        """Receive frames from client"""
         import struct
+        import pickle
         import queue
         
         self.is_running = True
         data = b""
-        payload_size = struct.calcsize("!I")  # 4 bytes, unsigned int, network order
+        payload_size = struct.calcsize("!L")
         
         try:
             while self.is_running:
-                # Receive message size (4 bytes)
+                # Receive message size
                 while len(data) < payload_size:
                     packet = self.client_socket.recv(4096)
                     if not packet:
-                        print(f"[{self.name}] Connection closed by client")
                         return
                     data += packet
                 
                 packed_msg_size = data[:payload_size]
                 data = data[payload_size:]
-                msg_size = struct.unpack("!I", packed_msg_size)[0]
+                msg_size = struct.unpack("!L", packed_msg_size)[0]
                 
                 # Receive frame data
                 while len(data) < msg_size:
                     packet = self.client_socket.recv(4096)
                     if not packet:
-                        print(f"[{self.name}] Connection closed while receiving frame")
                         return
                     data += packet
                 
                 frame_data = data[:msg_size]
                 data = data[msg_size:]
                 
-                # ====== FIX: Decode JPEG directly from bytes ======
-                # Convert bytes to numpy array
-                frame_array = np.frombuffer(frame_data, dtype=np.uint8)
-                
-                # Decode JPEG
-                frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
-                
-                if frame is None:
-                    print(f"[{self.name}] Failed to decode frame (size: {msg_size} bytes)")
-                    continue
+                # Deserialize
+                encoded_frame = pickle.loads(frame_data)
+                frame = cv2.imdecode(encoded_frame, cv2.IMREAD_COLOR)
                 
                 # Add to queue
                 if self.frame_queue.full():
@@ -135,8 +135,6 @@ class CameraReceiver:
                 
         except Exception as e:
             print(f"[{self.name}] Receive error: {e}")
-            import traceback
-            traceback.print_exc()
         finally:
             self.cleanup()
     
@@ -183,6 +181,21 @@ class WebSLAMServer:
             self.yolo = None
             print("[Web] SLAM not available")
         
+        # Semantic filtering (NEW!)
+        if SEMANTIC_AVAILABLE and SemanticFilter:
+            self.semantic_filter = SemanticFilter(
+                filter_dynamic=True,
+                min_confidence=0.5
+            )
+            self.semantic_grid = SemanticOccupancyGrid(
+                grid_size=400,
+                resolution=0.05
+            )
+            print("[Web] Semantic filtering enabled")
+        else:
+            self.semantic_filter = None
+            self.semantic_grid = None
+        
         # Depth mapping
         self.depth_mapper = StereoDepthMapper(baseline=0.1, focal_length=500)
         self.grid_mapper = OccupancyGridMapper(grid_size=400, resolution=0.05, max_range=5.0)
@@ -210,7 +223,8 @@ class WebSLAMServer:
             'depth': None,
             'grid': None,
             'map': None,
-            'path': None
+            'path': None,
+            'semantic': None  # NEW: Semantic view
         }
         self.frames_lock = threading.Lock()
         
@@ -240,7 +254,11 @@ class WebSLAMServer:
             # Map stats
             'persistent_map_points': 0,
             'trajectory_length': 0,
-            'obstacles_detected': 0
+            'obstacles_detected': 0,
+            # Semantic stats (NEW!)
+            'semantic_filtered': 0,
+            'dynamic_objects': 0,
+            'static_objects': 0
         }
         
         self.start_time = None
@@ -249,7 +267,7 @@ class WebSLAMServer:
     def start_receivers(self):
         """Start camera receivers"""
         print("\n" + "=" * 70)
-        print("  X99 Web SLAM - FIXED VERSION")
+        print("  X99 Web SLAM - Improved with Full Tracking")
         print("=" * 70)
         
         # Show IPs
@@ -303,17 +321,25 @@ class WebSLAMServer:
             print("\n[ERROR] Camera connection timeout")
             return False
         
-        print("\n[OK] Cameras connected and receiving frames!\n")
+        print("\n[OK] Cameras connected!\n")
         return True
     
     def process_slam_frame(self, frame_left, frame_right):
         """
-        Process stereo frame with FULL SLAM tracking
+        Process stereo frame with FULL SLAM tracking + SEMANTIC FILTERING
         """
         if not SLAM_AVAILABLE or self.slam_tracker is None:
             return frame_left
         
         try:
+            # Run YOLO segmentation FIRST
+            yolo_results = None
+            if self.yolo and self.yolo.model:
+                try:
+                    yolo_results = self.yolo.segment(frame_left, conf=0.5)
+                except Exception as e:
+                    print(f"[YOLO] Error: {e}")
+            
             # Run SLAM tracking with pose estimation
             current_pose, map_points, tracking_quality, slam_stats = \
                 self.slam_tracker.process_stereo_frame(frame_left, frame_right)
@@ -323,11 +349,32 @@ class WebSLAMServer:
             self.pose_2d = self.slam_tracker.get_current_pose_2d()
             self.tracking_quality = tracking_quality
             
+            # ✨ SEMANTIC FILTERING (NEW!)
+            if self.semantic_filter and yolo_results and len(map_points) > 0:
+                # Get camera matrix from SLAM tracker
+                camera_matrix = self.slam_tracker.K
+                image_size = (frame_left.shape[1], frame_left.shape[0])
+                
+                # Filter dynamic objects and classify
+                map_points = self.semantic_filter.filter_and_classify_points(
+                    map_points,
+                    yolo_results,
+                    camera_matrix,
+                    current_pose,
+                    image_size
+                )
+                
+                # Update stats
+                filter_stats = self.semantic_filter.get_statistics()
+                self.stats['semantic_filtered'] = filter_stats['filtered_points']
+                self.stats['dynamic_objects'] = filter_stats['dynamic_filtered']
+                self.stats['static_objects'] = filter_stats['static_classified']
+            
             # Update stats
             self.stats.update({
                 'tracking_quality': tracking_quality,
                 'num_keyframes': slam_stats['num_keyframes'],
-                'num_map_points': slam_stats['num_map_points'],
+                'num_map_points': len(map_points),  # After filtering!
                 'num_tracked_points': slam_stats['num_tracked_points'],
                 'num_inliers': slam_stats['num_inliers'],
                 'pose_x': round(self.pose_2d[0], 3),
@@ -335,7 +382,12 @@ class WebSLAMServer:
                 'pose_theta': round(self.pose_2d[2], 3)
             })
             
-            # Update persistent map with SLAM map points
+            # ✨ UPDATE SEMANTIC GRID (NEW!)
+            if self.semantic_grid and len(map_points) > 0:
+                self.semantic_grid.update_from_semantic_points(map_points)
+                self.semantic_grid.inflate_obstacles_semantic()
+            
+            # Update persistent map with FILTERED map points
             if len(map_points) > 0:
                 points_array = np.array([mp['position'] for mp in map_points])
                 colors_array = np.array([mp.get('color', [128, 128, 128]) for mp in map_points])
@@ -348,23 +400,20 @@ class WebSLAMServer:
                 self.stats['persistent_map_points'] = len(self.persistent_map.voxel_grid)
                 self.stats['trajectory_length'] = len(self.persistent_map.trajectory)
             
-            # Update path planner
+            # Update path planner with semantic grid if available
             if self.path_planner and tracking_quality == 'GOOD':
-                self.path_planner.update_map(map_points, current_pose)
+                if self.semantic_grid:
+                    # Use semantic occupancy grid (better!)
+                    semantic_map_data = self.semantic_grid.get_semantic_map_data()
+                    # TODO: Update path planner to use semantic costs
+                else:
+                    # Fallback to regular map
+                    self.path_planner.update_map(map_points, current_pose)
             
             # Create visualization
             vis_frame = self._create_slam_visualization(
-                frame_left, map_points, tracking_quality, slam_stats
+                frame_left, map_points, yolo_results, tracking_quality, slam_stats
             )
-            
-            # YOLO segmentation (optional)
-            if self.yolo and self.yolo.model:
-                try:
-                    yolo_results = self.yolo.segment(frame_left, conf=0.5)
-                    if yolo_results:
-                        vis_frame = self.yolo.draw_segments(vis_frame, yolo_results)
-                except Exception as e:
-                    print(f"[YOLO] Error: {e}")
             
             return vis_frame
             
@@ -374,9 +423,14 @@ class WebSLAMServer:
             traceback.print_exc()
             return frame_left
     
-    def _create_slam_visualization(self, frame, map_points, tracking_quality, stats):
-        """Create SLAM visualization with overlays"""
-        vis = frame.copy()
+    def _create_slam_visualization(self, frame, map_points, yolo_results, tracking_quality, stats):
+        """Create SLAM visualization with overlays + YOLO"""
+        # Start with YOLO overlay if available
+        if yolo_results and self.yolo:
+            vis = self.yolo.draw_segments(frame, yolo_results)
+        else:
+            vis = frame.copy()
+        
         h, w = vis.shape[:2]
         
         # Color based on tracking quality
@@ -394,10 +448,17 @@ class WebSLAMServer:
             f"SLAM Status: {tracking_quality}",
             f"Frame: {stats['frame_count']}",
             f"Keyframes: {stats['num_keyframes']}",
-            f"Map Points: {stats['num_map_points']}",
+            f"Map Points: {len(map_points)}",  # Use actual filtered count
             f"Tracked: {stats['num_inliers']} inliers",
             f"Pose: ({self.pose_2d[0]:.2f}, {self.pose_2d[1]:.2f}, {self.pose_2d[2]:.2f})"
         ]
+        
+        # Add semantic stats if available
+        if self.semantic_filter:
+            info_lines.extend([
+                f"Filtered: {self.stats.get('semantic_filtered', 0)} pts",
+                f"Dynamic: {self.stats.get('dynamic_objects', 0)} obj"
+            ])
         
         y_offset = 30
         for line in info_lines:
@@ -445,6 +506,14 @@ class WebSLAMServer:
             depth_vis = self._create_depth_visualization(frame_left, frame_right)
             grid_vis = self.persistent_map.visualize_2d(show_trajectory=True)
             
+            # Create semantic visualization if available
+            if self.semantic_grid:
+                semantic_vis = self.semantic_grid.visualize_semantic()
+                trav_vis = self.semantic_grid.visualize_traversability()
+            else:
+                semantic_vis = grid_vis.copy()
+                trav_vis = grid_vis.copy()
+            
             if self.path_planner and self.path_planner.current_path:
                 path_vis = self.path_planner.visualize_path()
             else:
@@ -455,8 +524,9 @@ class WebSLAMServer:
                 self.latest_frames['slam'] = slam_vis
                 self.latest_frames['depth'] = depth_vis
                 self.latest_frames['grid'] = grid_vis
-                self.latest_frames['map'] = grid_vis  # Same as grid for now
+                self.latest_frames['map'] = semantic_vis  # Semantic map!
                 self.latest_frames['path'] = path_vis
+                self.latest_frames['semantic'] = trav_vis  # Traversability!
             
             frame_count += 1
             fps_counter += 1
@@ -520,7 +590,7 @@ class WebSLAMServer:
 @app.route('/')
 def index():
     """Main dashboard"""
-    return render_template('index_improved.html')
+    return render_template('index.html')
 
 @app.route('/video_feed/<feed>')
 def video_feed(feed):
@@ -639,7 +709,7 @@ def run_web_server(host='0.0.0.0', port=1234, calibration_file=None):
         t.start()
     
     print(f"\n{'='*70}")
-    print(f"  Web Interface Running - FIXED VERSION")
+    print(f"  Web Interface Running with FULL SLAM Tracking")
     print(f"{'='*70}")
     print(f"Open browser: http://{host}:{port}")
     print(f"SLAM: AUTO-STARTED with pose estimation")
@@ -651,7 +721,7 @@ def run_web_server(host='0.0.0.0', port=1234, calibration_file=None):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='X99 Web SLAM - Fixed Version')
+    parser = argparse.ArgumentParser(description='X99 Web SLAM - Improved')
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=1234)
     parser.add_argument('--calibration', type=str, default='calibration_params.npz')
