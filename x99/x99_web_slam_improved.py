@@ -60,7 +60,6 @@ class CameraReceiver:
     def __init__(self, port: int, name: str):
         import socket
         import struct
-        import pickle
         import queue
         
         self.port = port
@@ -95,7 +94,7 @@ class CameraReceiver:
         
         self.is_running = True
         data = b""
-        payload_size = struct.calcsize("!L")
+        payload_size = struct.calcsize("!I")
         
         try:
             while self.is_running:
@@ -121,8 +120,12 @@ class CameraReceiver:
                 data = data[msg_size:]
                 
                 # Deserialize
-                encoded_frame = pickle.loads(frame_data)
-                frame = cv2.imdecode(encoded_frame, cv2.IMREAD_COLOR)
+                nparr = np.frombuffer(frame_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                if frame is None:
+                    print(f"[{self.name}] Failed to decode JPEG")
+                    continue
                 
                 # Add to queue
                 if self.frame_queue.full():
