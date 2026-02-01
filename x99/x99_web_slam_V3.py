@@ -44,7 +44,8 @@ class SLAMWebServer:
     def __init__(self, left_port=9001, right_port=9002):
         self.left_receiver = OptimizedCameraReceiver(left_port, "LEFT")
         self.right_receiver = OptimizedCameraReceiver(right_port, "RIGHT")
-        
+        self.latest_color_left = None
+        self.latest_color_right = None
         # SLAM components
         try:
             from x99_slam_server import ORBFeatureExtractor, YOLOSegmentator
@@ -292,7 +293,8 @@ class SLAMWebServer:
             
             frame_left = self.left_receiver.get_latest_frame()
             frame_right = self.right_receiver.get_latest_frame()
-            
+            self.latest_color_left = frame_left.copy()
+            self.latest_color_right = frame_right.copy()
             if frame_left is not None and frame_right is not None:
                 self.process_slam_frame(frame_left, frame_right)
                 
@@ -313,7 +315,7 @@ class SLAMWebServer:
         """Generate left camera MJPEG stream"""
         while self.is_running and self.streaming:
             if self.left_receiver.latest_frame is not None:
-                frame = self.left_receiver.latest_frame.copy()
+                frame = self.latest_color_left.copy() 
                 cv2.putText(frame, f"LEFT - FPS: {self.stats['left_fps']:.1f}",
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
