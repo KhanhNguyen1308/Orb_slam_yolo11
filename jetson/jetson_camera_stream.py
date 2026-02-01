@@ -85,10 +85,11 @@ class OptimizedCameraStreamer:
         try:
             # Try GStreamer pipeline
             gstreamer_pipeline = (
-                f'v4l2src device=/dev/video{self.camera_id} ! '
-                f'video/x-raw, width={self.width}, height={self.height}, '
-                f'framerate={self.config.fps}/1 ! '
-                f'videoconvert ! appsink'
+                f'nvarguscamerasrc sensor-id={self.camera_id} ! '
+                f'video/x-raw(memory:NVMM), width={self.width}, height={self.height}, '
+                f'format=NV12, framerate={self.config.fps}/1 ! '
+                f'nvvidconv ! video/x-raw, format=BGRx ! '
+                f'videoconvert ! video/x-raw, format=BGR ! appsink'
             )
             
             self.cap = cv2.VideoCapture(gstreamer_pipeline, cv2.CAP_GSTREAMER)
@@ -124,7 +125,7 @@ class OptimizedCameraStreamer:
             # 2. Set brightness/contrast
             self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.config.brightness)
             self.cap.set(cv2.CAP_PROP_CONTRAST, self.config.contrast)
-            self.cap.set(cv2.CAP_PROP_SATURATION, self.config.saturation)
+            #self.cap.set(cv2.CAP_PROP_SATURATION, self.config.saturation)
             print(f"[CAM{self.camera_id}] Brightness: {self.config.brightness:.2f}")
             
             # 3. White balance
