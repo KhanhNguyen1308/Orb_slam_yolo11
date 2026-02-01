@@ -126,7 +126,7 @@ class OptimizedCameraStreamer:
             self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.config.brightness)
             self.cap.set(cv2.CAP_PROP_CONTRAST, self.config.contrast)
             #self.cap.set(cv2.CAP_PROP_SATURATION, self.config.saturation)
-            self.cap.set(cv2.CAP_PROP_SATURATION, 64)
+            # self.cap.set(cv2.CAP_PROP_SATURATION, 64)
             print(f"[CAM{self.camera_id}] Brightness: {self.config.brightness:.2f}")
             
             # 3. White balance
