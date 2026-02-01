@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-X99 Web Interface V3 - FIXED POSE DRIFT + 2D LIDAR MAP
-========================================================
-FIXES:
-- Robot pose NO LONGER DRIFTS when stationary
-- Added clear 2D occupancy grid like LIDAR
-- Proper height filtering for 50cm camera height
-- Separated streaming from SLAM processing
+X99 Web Interface V3 - FIXED GRAYSCALE ISSUE
+=============================================
+FIX: Camera streaming preserves color (không còn bị xám)
 
-Robot specs:
-- Camera baseline: 10cm
-- Camera height: 50cm above ground
+Issue: compute_disparity() converts to grayscale internally but doesn't
+affect the original frames. The problem is we were using the processed
+grayscale frames for display.
+
+Solution: Keep original color frames separate from SLAM processing.
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -35,17 +33,15 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'slam_web_2024'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Global server instance
 web_server = None
 
 class SLAMWebServer:
-    """Web server with camera streaming and SLAM visualization - FIXED VERSION"""
+    """Web server with FIXED color preservation"""
     
     def __init__(self, left_port=9001, right_port=9002):
         self.left_receiver = OptimizedCameraReceiver(left_port, "LEFT")
         self.right_receiver = OptimizedCameraReceiver(right_port, "RIGHT")
-        self.latest_color_left = None
-        self.latest_color_right = None
+        
         # SLAM components
         try:
             from x99_slam_server import ORBFeatureExtractor, YOLOSegmentator
@@ -59,43 +55,28 @@ class SLAMWebServer:
             self.yolo = None
             self.has_slam = False
         
-        # Depth mapping components - CALIBRATED FOR 50cm HEIGHT
-        self.depth_mapper = StereoDepthMapper(
-            baseline=0.10,      # 10cm between cameras
-            focal_length=500    # Will be overridden by calibration if available
-        )
-        
-        # Occupancy grid for 2D navigation
-        self.grid_mapper = OccupancyGridMapper(
-            grid_size=600,       # 30m x 30m at 5cm resolution
-            resolution=0.05,     # 5cm per cell
-            max_range=15.0       # 15m max range
-        )
-        
-        # Persistent map builder
-        self.persistent_map = PersistentMap(
-            grid_size=800, 
-            resolution=0.02,    # 2cm for detailed 3D
-            voxel_size=0.05     # 5cm voxel for downsampling
-        )
+        # Depth mapping
+        self.depth_mapper = StereoDepthMapper(baseline=0.10, focal_length=500)
+        self.grid_mapper = OccupancyGridMapper(grid_size=600, resolution=0.05, max_range=15.0)
+        self.persistent_map = PersistentMap(grid_size=800, resolution=0.02, voxel_size=0.05)
         
         self.is_running = False
         self.streaming = False
         self.slam_processing = False
         
-        # Latest depth and grid
+        # CRITICAL FIX: Store COLOR frames separately from SLAM processing
+        self.latest_color_left = None   # NEW: Original color frame
+        self.latest_color_right = None  # NEW: Original color frame
         self.latest_depth = None
         self.latest_grid = None
-        self.latest_grid_2d = None  # NEW: 2D occupancy grid
+        self.latest_grid_2d = None
         self.latest_slam_frame = None
         self.depth_lock = threading.Lock()
         
-        # Robot pose - FIXED: Only update from external odometry
-        self.robot_pose = np.array([0.0, 0.5, 0.0])  # x, height(0.5m), z
-        self.robot_yaw = 0.0  # Orientation (radians)
-        
-        # CRITICAL: Flag to enable/disable pose updates
-        self.update_pose_from_velocity = False  # Set to True only if you have real odometry
+        # Robot pose
+        self.robot_pose = np.array([0.0, 0.5, 0.0])
+        self.robot_yaw = 0.0
+        self.update_pose_from_velocity = False
         
         # Stats
         self.stats = {
@@ -123,14 +104,14 @@ class SLAMWebServer:
         
         print("\n[INIT] Camera height: 50cm, Baseline: 10cm")
         print("[INIT] Robot pose LOCKED (no drift)")
+        print("[FIX] Color frames preserved separately")
     
     def start_receivers(self):
         """Start camera receivers"""
         print("\n" + "=" * 70)
-        print("  X99 SLAM Web Interface V3 - DRIFT FIXED")
+        print("  X99 SLAM V3 - GRAYSCALE ISSUE FIXED")
         print("=" * 70)
         
-        # Show IPs
         import subprocess
         try:
             result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
@@ -144,7 +125,6 @@ class SLAMWebServer:
         print(f"Camera ports: {self.left_receiver.port}, {self.right_receiver.port}")
         print("=" * 70 + "\n")
         
-        # Start receivers
         left_thread = threading.Thread(
             target=lambda: (
                 self.left_receiver.start_server() and
@@ -164,7 +144,6 @@ class SLAMWebServer:
         left_thread.start()
         right_thread.start()
         
-        # Wait for connections
         print("[WAITING] For Jetson camera connections...")
         
         for i in range(60):
@@ -184,33 +163,34 @@ class SLAMWebServer:
         print("\n[OK] Cameras connected!\n")
         return True
     
-    def process_slam_frame(self, frame_left, frame_right):
+    def process_slam_frame(self, frame_left_color, frame_right_color):
         """
-        Process stereo frame for SLAM and depth mapping
-        FIXED: No automatic pose updates
+        Process stereo frame for SLAM
+        CRITICAL: Work on COPIES, preserve original color frames
         """
         
-        # Compute depth map
+        # CRITICAL FIX: Make copies for SLAM processing
+        # Original color frames stay untouched
+        frame_left = frame_left_color.copy()
+        frame_right = frame_right_color.copy()
+        
         try:
+            # Compute depth (internally converts to gray, but doesn't affect our copies)
             disparity = self.depth_mapper.compute_disparity(frame_left, frame_right, use_wls=False)
             depth = self.depth_mapper.disparity_to_depth(disparity)
             
-            # Create 3D point cloud
-            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left)
+            # Use ORIGINAL COLOR frame for point cloud colors
+            points, colors = self.depth_mapper.depth_to_point_cloud(depth, frame_left_color)
             
             if len(points) > 100:
-                # --- HEIGHT FILTERING FOR 50cm CAMERA ---
-                # Transform points to world frame (camera is 50cm high)
-                # Camera Y-axis points down, so ground is at Y = -0.5m
                 points_world = points.copy()
-                points_world[:, 1] += 0.5  # Shift by camera height
+                points_world[:, 1] += 0.5
                 
-                # Filter valid points
                 valid_mask = (
-                    (points_world[:, 1] > -0.1) &  # Above ground
-                    (points_world[:, 1] < 2.5) &   # Below 2.5m
-                    (points_world[:, 2] > 0.1) &   # In front of camera
-                    (points_world[:, 2] < 15.0)    # Within 15m
+                    (points_world[:, 1] > -0.1) &
+                    (points_world[:, 1] < 2.5) &
+                    (points_world[:, 2] > 0.1) &
+                    (points_world[:, 2] < 15.0)
                 )
                 
                 points_valid = points_world[valid_mask]
@@ -219,22 +199,13 @@ class SLAMWebServer:
                 print(f"[SLAM] {len(points)} raw → {len(points_valid)} filtered points")
                 
                 if len(points_valid) > 50:
-                    # Add to persistent 3D map
-                    self.persistent_map.add_point_cloud(
-                        points_valid, 
-                        colors_valid, 
-                        self.robot_pose  # Use FIXED pose
-                    )
-                    
-                    # Update 2D occupancy grid
+                    self.persistent_map.add_point_cloud(points_valid, colors_valid, self.robot_pose)
                     self.grid_mapper.update_from_point_cloud(points_valid)
-                    self.grid_mapper.inflate_obstacles(radius=4)  # Inflate for safety
+                    self.grid_mapper.inflate_obstacles(radius=4)
                     
-                    # Get obstacle counts
                     obstacles = np.sum(self.grid_mapper.grid == 100)
                     free_space = np.sum(self.grid_mapper.grid == 0)
                     
-                    # Update stats
                     self.stats['map_points'] = len(points_valid)
                     self.stats['obstacles_detected'] = obstacles
                     self.stats['persistent_map_points'] = len(self.persistent_map.voxel_grid)
@@ -244,27 +215,23 @@ class SLAMWebServer:
                     
                     print(f"[GRID] Obstacles: {obstacles}, Free: {free_space}")
                 
-                # Store latest data
                 with self.depth_lock:
                     self.latest_depth = depth
                     self.latest_grid = self.persistent_map.visualize_2d(show_trajectory=True)
                     self.latest_grid_2d = self.grid_mapper.visualize()
                     
-            else:
-                print(f"[SLAM] Warning: Only {len(points)} points after filtering")
-                
         except Exception as e:
             print(f"[SLAM] Error: {e}")
             import traceback
             traceback.print_exc()
         
-        # ORB feature visualization (optional)
-        processed_frame = frame_left.copy()
+        # ORB features - work on COLOR frame copy
+        processed_frame = frame_left_color.copy()
         
         if self.has_slam and self.orb_extractor is not None:
             try:
-                kp_left, desc_left = self.orb_extractor.extract_features(frame_left)
-                kp_right, desc_right = self.orb_extractor.extract_features(frame_right)
+                kp_left, desc_left = self.orb_extractor.extract_features(frame_left_color)
+                kp_right, desc_right = self.orb_extractor.extract_features(frame_right_color)
                 matches = self.orb_extractor.match_features(desc_left, desc_right)
                 
                 processed_frame = cv2.drawKeypoints(
@@ -283,7 +250,7 @@ class SLAMWebServer:
             self.latest_slam_frame = processed_frame
     
     def slam_processing_loop(self):
-        """Background SLAM processing thread"""
+        """Background SLAM processing"""
         print("[SLAM] Processing thread started")
         
         while self.is_running:
@@ -291,11 +258,17 @@ class SLAMWebServer:
                 time.sleep(0.1)
                 continue
             
+            # CRITICAL FIX: Get color frames, store them, then process
             frame_left = self.left_receiver.get_latest_frame()
             frame_right = self.right_receiver.get_latest_frame()
-            self.latest_color_left = frame_left.copy()
-            self.latest_color_right = frame_right.copy()
+            
             if frame_left is not None and frame_right is not None:
+                # Store original COLOR frames
+                with self.depth_lock:
+                    self.latest_color_left = frame_left.copy()
+                    self.latest_color_right = frame_right.copy()
+                
+                # Process SLAM (works on copies)
                 self.process_slam_frame(frame_left, frame_right)
                 
                 self.slam_frame_count += 1
@@ -307,34 +280,52 @@ class SLAMWebServer:
                     self.slam_frame_count = 0
                     self.last_slam_time = current_time
             
-            time.sleep(0.1)  # 10 Hz
+            time.sleep(0.1)
         
         print("[SLAM] Processing thread stopped")
     
     def generate_left_stream(self):
-        """Generate left camera MJPEG stream"""
+        """Generate LEFT camera stream - USE ORIGINAL COLOR"""
         while self.is_running and self.streaming:
-            if self.left_receiver.latest_frame is not None:
-                frame = self.latest_color_left.copy() 
-                cv2.putText(frame, f"LEFT - FPS: {self.stats['left_fps']:.1f}",
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            # CRITICAL FIX: Use stored color frame, NOT receiver frame
+            with self.depth_lock:
+                if self.latest_color_left is not None:
+                    frame = self.latest_color_left.copy()
+                else:
+                    # Fallback to receiver if color not yet stored
+                    frame = self.left_receiver.get_latest_frame()
+                    if frame is None:
+                        time.sleep(0.03)
+                        continue
+            
+            cv2.putText(frame, f"LEFT - FPS: {self.stats['left_fps']:.1f}",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def generate_right_stream(self):
-        """Generate right camera MJPEG stream"""
+        """Generate RIGHT camera stream - USE ORIGINAL COLOR"""
         while self.is_running and self.streaming:
-            if self.right_receiver.latest_frame is not None:
-                frame = self.right_receiver.latest_frame.copy()
-                cv2.putText(frame, f"RIGHT - FPS: {self.stats['right_fps']:.1f}",
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            with self.depth_lock:
+                if self.latest_color_right is not None:
+                    frame = self.latest_color_right.copy()
+                else:
+                    frame = self.right_receiver.get_latest_frame()
+                    if frame is None:
+                        time.sleep(0.03)
+                        continue
+            
+            cv2.putText(frame, f"RIGHT - FPS: {self.stats['right_fps']:.1f}",
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def generate_slam_stream(self):
@@ -354,6 +345,7 @@ class SLAMWebServer:
                     _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def generate_depth_stream(self):
@@ -370,6 +362,7 @@ class SLAMWebServer:
                     _, buffer = cv2.imencode('.jpg', depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def generate_grid_stream(self):
@@ -385,16 +378,16 @@ class SLAMWebServer:
                     _, buffer = cv2.imencode('.jpg', grid_large, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def generate_grid_2d_stream(self):
-        """NEW: Generate 2D occupancy grid stream (LIDAR-like)"""
+        """Generate 2D occupancy grid stream"""
         while self.is_running and self.streaming:
             with self.depth_lock:
                 if self.latest_grid_2d is not None:
                     grid_large = cv2.resize(self.latest_grid_2d, (640, 640), interpolation=cv2.INTER_NEAREST)
                     
-                    # Add overlay info
                     cv2.putText(grid_large, f"2D GRID - Obstacles: {self.stats['grid_2d_obstacles']}",
                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(grid_large, f"Free: {self.stats['grid_2d_free']} cells",
@@ -403,6 +396,7 @@ class SLAMWebServer:
                     _, buffer = cv2.imencode('.jpg', grid_large, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            
             time.sleep(0.03)
     
     def update_stats_loop(self):
@@ -428,7 +422,7 @@ class SLAMWebServer:
             socketio.emit('stats_update', stats_json)
             time.sleep(1)
 
-# Flask routes
+# Flask routes (unchanged)
 @app.route('/')
 def index():
     return render_template('slam_web_V3.html')
@@ -470,7 +464,6 @@ def video_grid():
 
 @app.route('/video/grid2d')
 def video_grid_2d():
-    """NEW: 2D occupancy grid endpoint"""
     if web_server and web_server.streaming:
         return Response(web_server.generate_grid_2d_stream(),
                        mimetype='multipart/x-mixed-replace; boundary=frame')
@@ -498,7 +491,6 @@ def get_status():
 
 @app.route('/api/map_data')
 def get_map_data():
-    """3D point cloud data"""
     if not web_server or not web_server.persistent_map:
         return jsonify({'points': [], 'colors': [], 'robot_pose': [0, 0, 0]})
     
@@ -521,7 +513,6 @@ def get_map_data():
 
 @app.route('/api/map_2d')
 def get_map_2d():
-    """NEW: Get 2D occupancy grid for navigation"""
     if not web_server or not web_server.grid_mapper:
         return jsonify({'grid': [], 'robot_pose': [0, 0, 0]})
     
@@ -555,7 +546,6 @@ def clear_map():
 
 @app.route('/api/set_pose', methods=['POST'])
 def set_pose():
-    """NEW: Manually set robot pose"""
     if not web_server:
         return jsonify({'error': 'not running'}), 503
     
@@ -627,7 +617,6 @@ def run_web_server(host='0.0.0.0', port=1234):
     web_server.slam_processing = True
     web_server.start_time = time.time()
     
-    # Start background threads
     stats_thread = threading.Thread(target=web_server.update_stats_loop, daemon=True)
     stats_thread.start()
     
@@ -635,10 +624,10 @@ def run_web_server(host='0.0.0.0', port=1234):
     slam_thread.start()
     
     print(f"\n{'='*70}")
-    print(f"  Web Interface V3 - DRIFT FIXED")
+    print(f"  Web Interface V3 - GRAYSCALE FIXED")
     print(f"{'='*70}")
     print(f"URL: http://{host}:{port}")
-    print(f"Robot pose: LOCKED (no automatic updates)")
+    print(f"Color preservation: ENABLED")
     print(f"{'='*70}\n")
     
     socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
@@ -646,7 +635,7 @@ def run_web_server(host='0.0.0.0', port=1234):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='X99 SLAM V3 - Fixed Drift')
+    parser = argparse.ArgumentParser(description='X99 SLAM V3 - Grayscale Fixed')
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=1234)
     
