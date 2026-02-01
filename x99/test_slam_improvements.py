@@ -156,7 +156,7 @@ def test_calibration_loading():
     from x99_slam_server_improved import StereoSLAMTracker
     
     # Test with non-existent file
-    tracker1 = StereoSLAMTracker(calibration_file="nonexistent.npz")
+    tracker1 = StereoSLAMTracker(calibration_file="calibration_params.npz")
     print("✓ Handles missing calibration file")
     
     # Create dummy calibration file
