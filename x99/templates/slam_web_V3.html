@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X99 SLAM V3 - 2D Navigation Map</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 12px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 3px solid #0f3460;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+        
+        header h1 {
+            font-size: 20px;
+            color: #00d9ff;
+            text-shadow: 0 0 10px rgba(0,217,255,0.5);
+        }
+        
+        #connection-status {
+            font-size: 14px;
+            padding: 6px 15px;
+            border-radius: 20px;
+            background: rgba(0,0,0,0.3);
+        }
+        
+        .main-container {
+            display: grid;
+            grid-template-columns: 280px 1fr 480px;
+            grid-template-rows: 1fr;
+            height: calc(100vh - 60px);
+            gap: 8px;
+            padding: 8px;
+        }
+        
+        /* LEFT SIDEBAR - Camera Streams */
+        .camera-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .camera-box {
+            background: #1a1a1a;
+            border: 2px solid #2a2a2a;
+            border-radius: 8px;
+            overflow: hidden;
+            flex: 1;
+        }
+        
+        .camera-box header {
+            background: #2a2a2a;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: bold;
+            color: #00d9ff;
+            text-align: center;
+        }
+        
+        .camera-box img {
+            width: 100%;
+            height: auto;
+            display: block;
+            background: #000;
+        }
+        
+        /* CENTER - 2D MAP VIEW (MAIN) */
+        .map-2d-container {
+            background: #000;
+            border: 2px solid #0f3460;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .map-2d-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            image-rendering: pixelated;
+        }
+        
+        .map-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.85);
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            z-index: 10;
+        }
+        
+        .map-overlay h3 {
+            color: #00d9ff;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .map-overlay .stat {
+            font-size: 12px;
+            line-height: 1.8;
+            color: #b0b0b0;
+        }
+        
+        .map-overlay .stat strong {
+            color: #fff;
+        }
+        
+        .map-overlay .value {
+            color: #00ff88;
+            font-weight: bold;
+        }
+        
+        /* RIGHT SIDEBAR - 3D View + Controls */
+        .right-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .view-3d-container {
+            background: #000;
+            border: 2px solid #2a2a2a;
+            border-radius: 12px;
+            flex: 1;
+            position: relative;
+            min-height: 300px;
+        }
+        
+        #threejs-canvas {
+            width: 100%;
+            height: 100%;
+            outline: none;
+        }
+        
+        .controls-panel {
+            background: #1a1a1a;
+            border: 2px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        
+        .control-group {
+            margin-bottom: 12px;
+        }
+        
+        .control-label {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .button-row {
+            display: flex;
+            gap: 5px;
+        }
+        
+        button {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex: 1;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        .btn-start { background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%); color: #000; }
+        .btn-stop { background: linear-gradient(135deg, #ff4757 0%, #cc3a47 100%); color: #fff; }
+        .btn-clear { background: linear-gradient(135deg, #ffa502 0%, #cc8400 100%); color: #fff; }
+        .btn-slam { background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%); color: #000; }
+        .btn-save { background: linear-gradient(135deg, #a55eea 0%, #8854d0 100%); color: #fff; }
+        
+        .stats-display {
+            background: #0f0f0f;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            line-height: 1.8;
+            margin-top: 8px;
+        }
+        
+        .stats-display .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        
+        .stats-display .stat-label {
+            color: #888;
+        }
+        
+        .stats-display .stat-value {
+            color: #00ff88;
+            font-weight: bold;
+        }
+        
+        .status-online { color: #00ff88; }
+        .status-offline { color: #ff4757; }
+        
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.85);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 10px;
+            border: 1px solid #0f3460;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 12px;
+            border: 1px solid #555;
+            margin-right: 8px;
+            border-radius: 2px;
+        }
+        
+        .view-label {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,217,255,0.2);
+            padding: 6px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #00d9ff;
+            border: 1px solid #00d9ff;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🤖 X99 SLAM V3 - 2D Navigation System</h1>
+    <div id="connection-status">● CONNECTING...</div>
+</header>
+
+<div class="main-container">
+    <!-- LEFT: Camera Streams -->
+    <div class="camera-sidebar">
+        <div class="camera-box">
+            <header>📷 LEFT CAMERA</header>
+            <img id="video-left" src="" alt="Left Camera">
+        </div>
+        <div class="camera-box">
+            <header>📷 RIGHT CAMERA</header>
+            <img id="video-right" src="" alt="Right Camera">
+        </div>
+    </div>
+    
+    <!-- CENTER: 2D Navigation Map (MAIN VIEW) -->
+    <div class="map-2d-container">
+        <div class="view-label">🗺️ 2D OCCUPANCY GRID (LIDAR-LIKE)</div>
+        <img id="map-2d-view" src="" alt="2D Navigation Map">
+        
+        <div class="map-overlay">
+            <h3>📊 MAP STATUS</h3>
+            <div class="stat">Grid Size: <span class="value" id="grid-size">600x600</span></div>
+            <div class="stat">Resolution: <span class="value">5cm/cell</span></div>
+            <div class="stat">Obstacles: <span class="value" id="obstacle-count">0</span></div>
+            <div class="stat">Free Space: <span class="value" id="free-space">0</span></div>
+            <div class="stat">Range: <span class="value">15m</span></div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ffffff;"></div>
+                <span>Free Space</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #282828;"></div>
+                <span>Obstacle</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #808080;"></div>
+                <span>Unknown</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff0000;"></div>
+                <span>Robot</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- RIGHT: 3D View + Controls -->
+    <div class="right-sidebar">
+        <div class="view-3d-container">
+            <div class="view-label">🎯 3D POINT CLOUD</div>
+            <div id="threejs-canvas"></div>
+        </div>
+        
+        <div class="controls-panel">
+            <div class="control-group">
+                <div class="control-label">🎬 Video Stream</div>
+                <div class="button-row">
+                    <button class="btn-start" id="btn-start">▶ START</button>
+                    <button class="btn-stop" id="btn-stop">⏸ STOP</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <div class="control-label">🗺️ SLAM Processing</div>
+                <div class="button-row">
+                    <button class="btn-slam" id="btn-slam-start">START</button>
+                    <button class="btn-stop" id="btn-slam-stop">STOP</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <div class="control-label">💾 Map Control</div>
+                <div class="button-row">
+                    <button class="btn-clear" id="btn-clear">🗑 CLEAR</button>
+                    <button class="btn-save" id="btn-save">💾 SAVE</button>
+                </div>
+            </div>
+            
+            <div class="stats-display">
+                <div class="stat-row">
+                    <span class="stat-label">System Uptime:</span>
+                    <span class="stat-value" id="sys-uptime">0s</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">SLAM FPS:</span>
+                    <span class="stat-value" id="slam-fps">0.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Camera FPS:</span>
+                    <span class="stat-value" id="camera-fps">0.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">3D Points:</span>
+                    <span class="stat-value" id="point-count">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Pose Locked:</span>
+                    <span class="stat-value" style="color: #00ff88;">✓ YES</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+    
+    // Elements
+    const videoLeft = document.getElementById('video-left');
+    const videoRight = document.getElementById('video-right');
+    const map2DView = document.getElementById('map-2d-view');
+    
+    // --- THREE.JS 3D VIEW ---
+    let scene, camera, renderer, controls, pointCloud, robotMesh;
+    
+    function init3D() {
+        const container = document.getElementById('threejs-canvas');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+        
+        camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 100);
+        camera.position.set(0, 4, 8);
+        
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+        
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        
+        // Grid
+        const gridHelper = new THREE.GridHelper(20, 40, 0x444444, 0x1a1a1a);
+        scene.add(gridHelper);
+        
+        // Axes
+        const axesHelper = new THREE.AxesHelper(2);
+        scene.add(axesHelper);
+        
+        // Robot marker
+        const robotGeo = new THREE.BoxGeometry(0.3, 0.1, 0.4);
+        const robotMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+        robotMesh = new THREE.Mesh(robotGeo, robotMat);
+        robotMesh.position.y = 0.5; // Camera height
+        scene.add(robotMesh);
+        
+        // Ambient light
+        const light = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(light);
+        
+        animate();
+        console.log('[3D] Initialized');
+    }
+    
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    
+    function updatePointCloud(points, colors) {
+        if (pointCloud) {
+            scene.remove(pointCloud);
+            pointCloud.geometry.dispose();
+            pointCloud.material.dispose();
+        }
+        
+        if (points.length === 0) return;
+        
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(points.flat());
+        const colorsNorm = new Float32Array(colors.flat().map(c => c / 255.0));
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colorsNorm, 3));
+        
+        const material = new THREE.PointsMaterial({
+            size: 0.06,
+            vertexColors: true,
+            sizeAttenuation: true
+        });
+        
+        pointCloud = new THREE.Points(geometry, material);
+        scene.add(pointCloud);
+    }
+    
+    // --- MAP DATA FETCHING ---
+    let fetchCount = 0;
+    
+    async function fetchMapData() {
+        try {
+            const response = await fetch('/api/map_data');
+            const data = await response.json();
+            
+            if (data.points && data.points.length > 0) {
+                updatePointCloud(data.points, data.colors);
+                document.getElementById('point-count').innerText = data.points.length.toLocaleString();
+                fetchCount++;
+            }
+            
+            if (data.robot_pose) {
+                robotMesh.position.set(data.robot_pose[0], data.robot_pose[1], data.robot_pose[2]);
+            }
+        } catch (e) {
+            if (fetchCount % 10 === 0) {
+                console.error('[Map] Fetch error:', e.message);
+            }
+        }
+    }
+    
+    async function fetchMap2D() {
+        try {
+            const response = await fetch('/api/map_2d');
+            const data = await response.json();
+            
+            if (data.obstacles !== undefined) {
+                document.getElementById('obstacle-count').innerText = data.obstacles.toLocaleString();
+            }
+            if (data.free_space !== undefined) {
+                document.getElementById('free-space').innerText = data.free_space.toLocaleString();
+            }
+            if (data.grid_size !== undefined) {
+                document.getElementById('grid-size').innerText = `${data.grid_size}x${data.grid_size}`;
+            }
+        } catch (e) {
+            console.error('[2D Map] Fetch error:', e.message);
+        }
+    }
+    
+    // --- CONTROLS ---
+    function startStreaming() {
+        const t = Date.now();
+        videoLeft.src = `/video/left?t=${t}`;
+        videoRight.src = `/video/right?t=${t}`;
+        map2DView.src = `/video/grid2d?t=${t}`;
+        socket.emit('start_streaming');
+        console.log('[Stream] Started');
+    }
+    
+    function stopStreaming() {
+        videoLeft.src = '';
+        videoRight.src = '';
+        map2DView.src = '';
+        socket.emit('stop_streaming');
+        console.log('[Stream] Stopped');
+    }
+    
+    function startSlam() {
+        socket.emit('start_slam');
+        console.log('[SLAM] Started');
+    }
+    
+    function stopSlam() {
+        socket.emit('stop_slam');
+        console.log('[SLAM] Stopped');
+    }
+    
+    async function clearMap() {
+        try {
+            const response = await fetch('/api/clear_map');
+            const data = await response.json();
+            if (data.success) {
+                console.log('[Map] Cleared');
+                if (pointCloud) {
+                    scene.remove(pointCloud);
+                    pointCloud.geometry.dispose();
+                    pointCloud.material.dispose();
+                    pointCloud = null;
+                }
+                document.getElementById('point-count').innerText = '0';
+                document.getElementById('obstacle-count').innerText = '0';
+                document.getElementById('free-space').innerText = '0';
+            }
+        } catch (e) {
+            console.error('[Map] Clear error:', e.message);
+        }
+    }
+    
+    async function saveMap() {
+        try {
+            const response = await fetch('/api/save_map');
+            const data = await response.json();
+            if (data.success) {
+                alert(`Map saved: ${data.filename}`);
+                console.log('[Map] Saved:', data.filename);
+            }
+        } catch (e) {
+            console.error('[Map] Save error:', e.message);
+        }
+    }
+    
+    // --- EVENT LISTENERS ---
+    document.getElementById('btn-start').addEventListener('click', startStreaming);
+    document.getElementById('btn-stop').addEventListener('click', stopStreaming);
+    document.getElementById('btn-slam-start').addEventListener('click', startSlam);
+    document.getElementById('btn-slam-stop').addEventListener('click', stopSlam);
+    document.getElementById('btn-clear').addEventListener('click', clearMap);
+    document.getElementById('btn-save').addEventListener('click', saveMap);
+    
+    // --- SOCKET EVENTS ---
+    socket.on('connect', () => {
+        document.getElementById('connection-status').innerHTML = '<span class="status-online">● CONNECTED</span>';
+        console.log('[Socket] Connected');
+    });
+    
+    socket.on('disconnect', () => {
+        document.getElementById('connection-status').innerHTML = '<span class="status-offline">● DISCONNECTED</span>';
+        console.log('[Socket] Disconnected');
+    });
+    
+    socket.on('stats_update', (data) => {
+        document.getElementById('sys-uptime').innerText = Math.floor(data.uptime) + 's';
+        document.getElementById('slam-fps').innerText = data.slam_fps.toFixed(1);
+        document.getElementById('camera-fps').innerText = data.left_fps.toFixed(1);
+        
+        if (data.grid_2d_obstacles !== undefined) {
+            document.getElementById('obstacle-count').innerText = data.grid_2d_obstacles.toLocaleString();
+        }
+        if (data.grid_2d_free !== undefined) {
+            document.getElementById('free-space').innerText = data.grid_2d_free.toLocaleString();
+        }
+    });
+    
+    // --- AUTO-RELOAD STREAMS ---
+    [videoLeft, videoRight, map2DView].forEach(img => {
+        img.addEventListener('error', () => {
+            if (img.src !== '') {
+                setTimeout(() => {
+                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
+                }, 1000);
+            }
+        });
+    });
+    
+    // --- INITIALIZATION ---
+    window.addEventListener('load', () => {
+        init3D();
+        console.log('[App] Initialized');
+        
+        // Auto-start
+        setTimeout(() => {
+            startStreaming();
+            startSlam();
+        }, 1000);
+        
+        // Periodic updates
+        setInterval(fetchMapData, 1000);
+        setInterval(fetchMap2D, 2000);
+    });
+    
+    window.addEventListener('resize', () => {
+        const container = document.getElementById('threejs-canvas');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+</script>
+
+</body>
+</html>
