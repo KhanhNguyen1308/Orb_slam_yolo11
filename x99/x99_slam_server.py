@@ -1,3 +1,4 @@
+#x99_slam_server.py
 #!/usr/bin/env python3
 """
 X99 Server - Receive camera streams from Jetson Nano and run SLAM
@@ -24,8 +25,8 @@ except ImportError:
 class ServerConfig:
     """Server configuration"""
     host: str = "0.0.0.0"  # Listen on all interfaces
-    left_port: int = 9001
-    right_port: int = 9002
+    left_port: int = 9002
+    right_port: int = 9001
     baseline: float = 0.10  # 10cm
     focal_length: float = 500
 

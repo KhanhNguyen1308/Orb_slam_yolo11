@@ -1,3 +1,4 @@
+#x99_web_slam_V2.py
 #!/usr/bin/env python3
 """
 X99 Web Interface for SLAM + Camera Streams
@@ -39,7 +40,7 @@ class SLAMWebServer:
         # SLAM components
         try:
             from x99_slam_server import ORBFeatureExtractor, YOLOSegmentator
-            self.orb_extractor = ORBFeatureExtractor(n_features=3000)
+            self.orb_extractor = ORBFeatureExtractor(n_features=800)
             self.yolo = YOLOSegmentator()
             self.has_slam = True
             print("[Web] SLAM components loaded")
