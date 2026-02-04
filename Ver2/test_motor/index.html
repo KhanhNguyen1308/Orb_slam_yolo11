@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Robot Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .led {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #f44336;
+            box-shadow: 0 0 10px rgba(244, 67, 54, 0.5);
+            animation: pulse 2s infinite;
+        }
+        
+        .led.connected {
+            background: #4CAF50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+            animation: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        
+        .control-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        button {
+            padding: 15px 30px;
+            font-size: 1.1em;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        .btn-enable {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+        }
+        
+        .btn-enable:hover {
+            box-shadow: 0 6px 20px rgba(76, 175, 80, 0.6);
+        }
+        
+        .btn-disable {
+            background: linear-gradient(135deg, #f44336, #da190b);
+            color: white;
+            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
+        }
+        
+        .btn-disable:hover {
+            box-shadow: 0 6px 20px rgba(244, 67, 54, 0.6);
+        }
+        
+        .btn-stop {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, #FF9800, #F57C00);
+            color: white;
+            box-shadow: 0 4px 15px rgba(255, 152, 0, 0.4);
+            font-size: 1.3em;
+            padding: 20px;
+        }
+        
+        .btn-stop:hover {
+            box-shadow: 0 6px 20px rgba(255, 152, 0, 0.6);
+        }
+        
+        .joystick-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 30px;
+        }
+        
+        .joystick-zone {
+            width: 300px;
+            height: 300px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 50%;
+            position: relative;
+            touch-action: none;
+            user-select: none;
+            margin-bottom: 20px;
+            box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.5);
+        }
+        
+        .joystick-stick {
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(33, 150, 243, 0.6);
+            border: 3px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .velocity-display {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        
+        .velocity-item {
+            text-align: center;
+        }
+        
+        .velocity-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+        
+        .velocity-value {
+            font-size: 1.5em;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .keyboard-hint {
+            text-align: center;
+            margin-top: 20px;
+            opacity: 0.7;
+            font-size: 0.9em;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .joystick-zone {
+                width: 250px;
+                height: 250px;
+            }
+            
+            .joystick-stick {
+                width: 80px;
+                height: 80px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Tank Robot Control</h1>
+        
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="led" id="connectionLed"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div id="motorStatus">Motors: OFF</div>
+        </div>
+        
+        <div class="control-buttons">
+            <button class="btn-enable" onclick="enableMotors()">⚡ Enable</button>
+            <button class="btn-disable" onclick="disableMotors()">🔌 Disable</button>
+            <button class="btn-stop" onclick="emergencyStop()">🛑 STOP</button>
+        </div>
+        
+        <div class="joystick-container">
+            <div class="joystick-zone" id="joystickZone">
+                <div class="joystick-stick" id="joystickStick"></div>
+            </div>
+            
+            <div class="velocity-display">
+                <div class="velocity-item">
+                    <div class="velocity-label">Linear (m/s)</div>
+                    <div class="velocity-value" id="linearVel">0.00</div>
+                </div>
+                <div class="velocity-item">
+                    <div class="velocity-label">Angular (rad/s)</div>
+                    <div class="velocity-value" id="angularVel">0.00</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="keyboard-hint">
+            💡 Sử dụng WASD hoặc kéo joystick để điều khiển
+        </div>
+    </div>
+    
+    <script>
+        // Configuration
+        const MAX_LINEAR = 0.5;  // m/s
+        const MAX_ANGULAR = 2.0; // rad/s
+        const UPDATE_RATE = 50;  // ms
+        
+        let currentLinear = 0;
+        let currentAngular = 0;
+        let isDragging = false;
+        let isKeyboardActive = false;
+        let updateInterval = null;
+        
+        // Joystick elements
+        const joystickZone = document.getElementById('joystickZone');
+        const joystickStick = document.getElementById('joystickStick');
+        
+        // Status updates
+        function updateStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    const led = document.getElementById('connectionLed');
+                    const statusText = document.getElementById('statusText');
+                    const motorStatus = document.getElementById('motorStatus');
+                    
+                    if (data.error) {
+                        led.classList.remove('connected');
+                        statusText.textContent = 'Disconnected';
+                        motorStatus.textContent = 'Motors: ???';
+                    } else {
+                        led.classList.add('connected');
+                        statusText.textContent = 'Connected';
+                        motorStatus.textContent = data.enabled ? 'Motors: ON' : 'Motors: OFF';
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('connectionLed').classList.remove('connected');
+                    document.getElementById('statusText').textContent = 'Error';
+                });
+        }
+        
+        // Motor controls
+        function enableMotors() {
+            fetch('/api/enable', { method: 'POST' })
+                .then(r => r.json())
+                .then(() => updateStatus())
+                .catch(err => alert('Error: ' + err));
+        }
+        
+        function disableMotors() {
+            fetch('/api/disable', { method: 'POST' })
+                .then(r => r.json())
+                .then(() => {
+                    currentLinear = 0;
+                    currentAngular = 0;
+                    updateDisplay();
+                    updateStatus();
+                })
+                .catch(err => alert('Error: ' + err));
+        }
+        
+        function emergencyStop() {
+            fetch('/api/stop', { method: 'POST' })
+                .then(() => {
+                    currentLinear = 0;
+                    currentAngular = 0;
+                    resetJoystick();
+                    updateDisplay();
+                })
+                .catch(err => alert('Error: ' + err));
+        }
+        
+        // Send velocity command
+        function sendVelocity(linear, angular) {
+            fetch('/api/velocity', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ linear, angular })
+            }).catch(() => {}); // Ignore errors for smooth control
+        }
+        
+        // Update display
+        function updateDisplay() {
+            document.getElementById('linearVel').textContent = currentLinear.toFixed(2);
+            document.getElementById('angularVel').textContent = currentAngular.toFixed(2);
+        }
+        
+        // Joystick handling
+        function handleJoystickMove(clientX, clientY) {
+            const rect = joystickZone.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            let dx = clientX - centerX;
+            let dy = clientY - centerY;
+            
+            const maxRadius = rect.width / 2 - 50;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance > maxRadius) {
+                dx = (dx / distance) * maxRadius;
+                dy = (dy / distance) * maxRadius;
+            }
+            
+            // Update stick position
+            joystickStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+            
+            // Calculate velocities
+            currentLinear = -(dy / maxRadius) * MAX_LINEAR;
+            currentAngular = (dx / maxRadius) * MAX_ANGULAR;
+            
+            updateDisplay();
+        }
+        
+        function resetJoystick() {
+            joystickStick.style.transform = 'translate(-50%, -50%)';
+        }
+        
+        // Mouse events
+        joystickStick.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                handleJoystickMove(e.clientX, e.clientY);
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                currentLinear = 0;
+                currentAngular = 0;
+                resetJoystick();
+                updateDisplay();
+                sendVelocity(0, 0);
+            }
+        });
+        
+        // Touch events
+        joystickStick.addEventListener('touchstart', (e) => {
+            isDragging = true;
+            e.preventDefault();
+        });
+        
+        document.addEventListener('touchmove', (e) => {
+            if (isDragging) {
+                const touch = e.touches[0];
+                handleJoystickMove(touch.clientX, touch.clientY);
+                e.preventDefault();
+            }
+        });
+        
+        document.addEventListener('touchend', () => {
+            if (isDragging) {
+                isDragging = false;
+                currentLinear = 0;
+                currentAngular = 0;
+                resetJoystick();
+                updateDisplay();
+                sendVelocity(0, 0);
+            }
+        });
+        
+        // Keyboard control
+        const keyState = {};
+        
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (['w', 'a', 's', 'd'].includes(key)) {
+                keyState[key] = true;
+                isKeyboardActive = true;
+                updateKeyboardControl();
+                e.preventDefault();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (['w', 'a', 's', 'd'].includes(key)) {
+                keyState[key] = false;
+                updateKeyboardControl();
+                e.preventDefault();
+            }
+        });
+        
+        function updateKeyboardControl() {
+            let linear = 0;
+            let angular = 0;
+            
+            if (keyState['w']) linear += MAX_LINEAR;
+            if (keyState['s']) linear -= MAX_LINEAR;
+            if (keyState['a']) angular -= MAX_ANGULAR;
+            if (keyState['d']) angular += MAX_ANGULAR;
+            
+            currentLinear = linear;
+            currentAngular = angular;
+            updateDisplay();
+            
+            if (linear === 0 && angular === 0) {
+                isKeyboardActive = false;
+            }
+        }
+        
+        // Periodic velocity update
+        setInterval(() => {
+            if (isDragging || isKeyboardActive) {
+                sendVelocity(currentLinear, currentAngular);
+            }
+        }, UPDATE_RATE);
+        
+        // Status polling
+        setInterval(updateStatus, 1000);
+        updateStatus();
+    </script>
+</body>
+</html>
