@@ -92,12 +92,6 @@ class OptimizedCameraStreamer:
             # Verify settings
             actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Manual
-            self.cap.set(cv2.CAP_PROP_EXPOSURE, -5)         # Darker
-
-            # Improve quality
-            self.cap.set(cv2.CAP_PROP_BRIGHTNESS, 110)      # Reduce
-            self.cap.set(cv2.CAP_PROP_CONTRAST, 45) 
             print(f"[OK] Camera {self.camera_id}: {actual_width}x{actual_height}")
             return True
             
