@@ -45,18 +45,34 @@ class DriftCorrectedSLAM:
                  cx: float = 320, cy: float = 240):
         
         # ORB Feature Detector
-        self.orb = cv2.ORB_create(
-            nfeatures=n_features,
-            scaleFactor=1.2,
-            nLevels=8,
-            edgeThreshold=15,
-            firstLevel=0,
-            WTA_K=2,
-            scoreType=cv2.ORB_HARRIS_SCORE,
-            patchSize=31,
-            fastThreshold=20
-        )
-        
+        try:
+            # Try full parameters first
+            self.orb = cv2.ORB_create(
+                nfeatures=n_features,
+                scaleFactor=1.2,
+                nLevels=8,
+                edgeThreshold=15,
+                firstLevel=0,
+                WTA_K=2,
+                scoreType=cv2.ORB_HARRIS_SCORE,
+                patchSize=31,
+                fastThreshold=20
+            )
+        except TypeError:
+            # Fallback for older versions
+            try:
+                self.orb = cv2.ORB_create(
+                    nfeatures=n_features,
+                    scaleFactor=1.2,
+                    nlevels=8,  # lowercase
+                    edgeThreshold=15
+                )
+            except TypeError:
+                # Minimal fallback
+                self.orb = cv2.ORB_create(nfeatures=n_features)
+
+        print(f"[ORB] Created with {n_features} features")
+                
         # Feature Matcher  
         self.bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         
