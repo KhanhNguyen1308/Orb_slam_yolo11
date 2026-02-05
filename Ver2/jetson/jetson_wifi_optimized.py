@@ -61,56 +61,35 @@ class OptimizedCameraStreamer:
         self.start_time = None
         
     def initialize_camera(self) -> bool:
-        """Initialize camera with color correction settings"""
+        """Initialize OV9732 - Grayscale sensor"""
         try:
-            # 1. CỐ GẮNG DÙNG GSTREAMER VỚI VIDEOCONVERT ĐỂ XỬ LÝ MÀU TỐT HƠN
-            # Thêm videobalance vào pipeline để chỉnh màu nếu cần (saturation, brightness)
-            # v4l2src -> chỉnh màu -> convert -> appsink
+            # OV9732 outputs GRAY8
             gstreamer_pipeline = (
                 f'v4l2src device=/dev/video{self.camera_id} ! '
                 f'video/x-raw, width={self.width}, height={self.height}, '
-                f'framerate={self.config.fps}/1 ! '
-                f'videobalance saturation=1.2 brightness=0.5 contrast=1.1 ! ' # Tăng bão hòa màu nhẹ
-                f'videoconvert ! appsink'
+                f'format=GRAY8, framerate={self.config.fps}/1 ! '
+                f'videoconvert ! '
+                f'video/x-raw, format=BGR ! '
+                f'appsink'
             )
             
-            print(f"[INFO] Trying GStreamer for Camera {self.camera_id}...")
             self.cap = cv2.VideoCapture(gstreamer_pipeline, cv2.CAP_GSTREAMER)
             
             if not self.cap.isOpened():
-                print(f"[INFO] GStreamer failed, using standard capture")
+                # Fallback
                 self.cap = cv2.VideoCapture(self.camera_id)
-                
                 if not self.cap.isOpened():
-                    print(f"[ERROR] Cannot open camera {self.camera_id}")
                     return False
                 
-                # --- CÀI ĐẶT CHO STANDARD CAPTURE (FALLBACK) ---
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.cap.set(cv2.CAP_PROP_FPS, self.config.fps)
-                
-                # --- THÊM PHẦN NÀY ĐỂ FIX MÀU ---
-                # Bật Auto White Balance (0.0 = Off, 1.0 = On)
-                self.cap.set(cv2.CAP_PROP_AUTO_WB, 1.0) 
-                
-                # Nếu Auto WB không hoạt động, bỏ comment dòng dưới để chỉnh tay (nhiệt độ màu 2800-6500)
-                # self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, 4600)
-                
-                # Reset độ sáng/tương phản (thử 0.5 hoặc giá trị cụ thể tùy driver camera)
-                self.cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5) # Giá trị thường từ 0.0 đến 1.0
-                self.cap.set(cv2.CAP_PROP_CONTRAST, 0.5)
-                self.cap.set(cv2.CAP_PROP_SATURATION, 0.6) # Tăng nhẹ độ đậm màu
-                
-            # Verify settings
-            actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
-            print(f"[OK] Camera {self.camera_id}: {actual_width}x{actual_height}")
+            print(f"[OK] OV9732 Camera {self.camera_id}: 640x480")
             return True
             
         except Exception as e:
-            print(f"[ERROR] Camera {self.camera_id} init failed: {e}")
+            print(f"[ERROR] {e}")
             return False
     
     def connect_to_server(self) -> bool:
