@@ -25,10 +25,10 @@ from PIL import Image
 import queue
 
 # Import improved SLAM components
-from slam_improved_drift_correction import DriftCorrectedSLAM
-from navigation_map_2d import NavigationMap2D
-from persistent_map import PersistentMap
-from camera_height_adapter import CameraHeightAdapter
+from x99_slam_improved_drift_correction import DriftCorrectedSLAM
+from x99_navigation_map_2d import NavigationMap2D
+from x99_persistent_map import PersistentMap
+from x99_camera_height_adapter import CameraHeightAdapter
 
 # Import existing camera receiver
 try:
