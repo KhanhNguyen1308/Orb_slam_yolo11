@@ -61,35 +61,53 @@ class OptimizedCameraStreamer:
         self.start_time = None
         
     def initialize_camera(self) -> bool:
-        """Initialize OV9732 - Grayscale sensor"""
+        """Initialize Camera with Color Correction"""
         try:
-            # OV9732 outputs GRAY8
-            ggstreamer_pipeline = (
+            print(f"[INFO] Init Camera {self.camera_id}...")
+            
+            # --- CẤU HÌNH PIPELINE ---
+            # 1. v4l2src: Đọc camera
+            # 2. videobalance: Tăng độ bão hòa (saturation) và tương phản (contrast)
+            # 3. videoconvert: Chuyển đổi định dạng sang BGR để OpenCV hiểu
+            gstreamer_pipeline = (
                 f'v4l2src device=/dev/video{self.camera_id} ! '
                 f'video/x-raw, width={self.width}, height={self.height}, '
-                f'videobalance contrast=1.3 saturation=1.4 brightness=-0.1 ! ' # Tăng tương phản, tăng màu, giảm sáng nhẹ
+                f'framerate={self.config.fps}/1 ! '
+                f'videobalance contrast=1.3 saturation=1.5 brightness=-0.1 ! '
                 f'videoconvert ! '
                 f'video/x-raw, format=BGR ! '
-                f'appsink'
+                f'appsink drop=1'
             )
             
+            # Khởi tạo camera bằng GStreamer
             self.cap = cv2.VideoCapture(gstreamer_pipeline, cv2.CAP_GSTREAMER)
             
+            # Kiểm tra xem GStreamer có chạy được không
             if not self.cap.isOpened():
-                # Fallback
+                print(f"[WARN] GStreamer failed for Cam {self.camera_id}, using default OpenCV...")
+                # Fallback: Dùng OpenCV thông thường nếu GStreamer lỗi
                 self.cap = cv2.VideoCapture(self.camera_id)
+                
                 if not self.cap.isOpened():
+                    print(f"[ERROR] Could not open camera {self.camera_id}")
                     return False
                 
+                # Cài đặt thủ công cho chế độ fallback
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.cap.set(cv2.CAP_PROP_FPS, self.config.fps)
             
-            print(f"[OK] OV9732 Camera {self.camera_id}: 640x480")
+            # Kiểm tra thử đọc 1 frame để chắc chắn có màu
+            ret, frame = self.cap.read()
+            if ret:
+                print(f"[OK] Camera {self.camera_id} Started. Shape: {frame.shape}")
+            else:
+                print(f"[WARN] Camera {self.camera_id} opened but returned no frame.")
+                
             return True
             
         except Exception as e:
-            print(f"[ERROR] {e}")
+            print(f"[ERROR] Camera {self.camera_id} init exception: {e}")
             return False
     
     def connect_to_server(self) -> bool:
