@@ -25,10 +25,10 @@ from PIL import Image
 import queue
 
 # Import improved SLAM components
-from x99_slam_improved_drift_correction import DriftCorrectedSLAM
-from x99_navigation_map_2d import NavigationMap2D
-from x99_persistent_map import PersistentMap
-from x99_camera_height_adapter import CameraHeightAdapter
+from slam_improved_drift_correction import DriftCorrectedSLAM
+from navigation_map_2d import NavigationMap2D
+from persistent_map import PersistentMap
+from camera_height_adapter import CameraHeightAdapter
 
 # Import existing camera receiver
 try:
@@ -70,7 +70,7 @@ class HeadlessSLAMServer:
         
         # Drift-corrected SLAM
         self.slam = DriftCorrectedSLAM(
-            n_features=3000,
+            n_features=2000,
             baseline=0.10,
             focal_length=500
         )
@@ -188,8 +188,10 @@ class HeadlessSLAMServer:
         """
         Main SLAM processing loop
         Runs independently of web streaming
+        Enhanced for OV9732 grayscale cameras
         """
         print("[SLAM] Processing loop started")
+        print("[SLAM] OV9732 grayscale preprocessing enabled")
         
         while self.slam_active:
             try:
@@ -201,16 +203,21 @@ class HeadlessSLAMServer:
                     time.sleep(0.01)
                     continue
                 
-                # Store latest frames
+                # ===== OV9732 PREPROCESSING =====
+                # Enhanced preprocessing for grayscale cameras
+                left_enhanced = self._preprocess_ov9732(left)
+                right_enhanced = self._preprocess_ov9732(right)
+                
+                # Store enhanced frames for web display
                 with self.frame_lock:
-                    self.latest_left = left.copy()
-                    self.latest_right = right.copy()
+                    self.latest_left = left_enhanced.copy()
+                    self.latest_right = right_enhanced.copy()
                 
                 # ===== SLAM PROCESSING =====
                 start_time = time.time()
                 
-                # Process stereo frame
-                current_pose, tracking = self.slam.process_frame(left, right)
+                # Process with enhanced frames
+                current_pose, tracking = self.slam.process_frame(left_enhanced, right_enhanced)
                 
                 # Extract position
                 pos_x = current_pose[0, 3]
@@ -246,7 +253,7 @@ class HeadlessSLAMServer:
                             self.last_map_update = time.time()
                         
                         # Update persistent map
-                        colors = self._extract_colors(left, points_filtered)
+                        colors = self._extract_colors(left_enhanced, points_filtered)
                         robot_pose_3d = np.array([pos_x, pos_y, pos_z])
                         
                         self.persistent_map.add_point_cloud(
@@ -256,7 +263,7 @@ class HeadlessSLAMServer:
                         )
                 
                 # Create visualization
-                vis = self._create_slam_visualization(left, current_pose, tracking)
+                vis = self._create_slam_visualization(left_enhanced, current_pose, tracking)
                 nav_vis = self.nav_map.visualize(show_costmap=False, path=self.current_path)
                 
                 with self.frame_lock:
@@ -289,6 +296,38 @@ class HeadlessSLAMServer:
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.1)
+    
+    def _preprocess_ov9732(self, img):
+        """
+        Preprocess OV9732 grayscale camera frames
+        Critical for good feature detection!
+        """
+        # Convert to grayscale if needed
+        if len(img.shape) == 3:
+            # Check if it's actually grayscale data in BGR format
+            if np.allclose(img[:,:,0], img[:,:,1]) and np.allclose(img[:,:,1], img[:,:,2]):
+                gray = img[:,:,0]
+            else:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+        
+        # Enhanced CLAHE for grayscale sensors
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        
+        # Optional: Gamma correction for better exposure
+        # Uncomment if image is still too dark/bright
+        # gamma = 1.1
+        # inv_gamma = 1.0 / gamma
+        # table = np.array([((i / 255.0) ** inv_gamma) * 255 
+        #                  for i in range(256)]).astype("uint8")
+        # enhanced = cv2.LUT(enhanced, table)
+        
+        # Convert back to BGR for compatibility
+        enhanced_bgr = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        
+        return enhanced_bgr
     
     def _extract_colors(self, image, points_3d_camera):
         """Extract RGB colors for 3D points"""
@@ -563,7 +602,7 @@ def main():
                        help='Left camera port')
     parser.add_argument('--right-port', type=int, default=9001,
                        help='Right camera port')
-    parser.add_argument('--web-port', type=int, default=1234,
+    parser.add_argument('--web-port', type=int, default=5000,
                        help='Web server port')
     parser.add_argument('--host', type=str, default='0.0.0.0',
                        help='Web server host')

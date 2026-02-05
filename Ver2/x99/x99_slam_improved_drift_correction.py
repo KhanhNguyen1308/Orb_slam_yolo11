@@ -44,9 +44,9 @@ class DriftCorrectedSLAM:
                  focal_length: float = 500,
                  cx: float = 320, cy: float = 240):
         
-        # ORB Feature Detector
+        # ORB Feature Detector with compatibility
         try:
-            # Try full parameters first
+            # Try with all parameters (OpenCV 4.5+)
             self.orb = cv2.ORB_create(
                 nfeatures=n_features,
                 scaleFactor=1.2,
@@ -59,20 +59,20 @@ class DriftCorrectedSLAM:
                 fastThreshold=20
             )
         except TypeError:
-            # Fallback for older versions
+            # Fallback for older OpenCV versions
             try:
                 self.orb = cv2.ORB_create(
                     nfeatures=n_features,
                     scaleFactor=1.2,
-                    nlevels=8,  # lowercase
+                    nlevels=8,  # lowercase 'nlevels'
                     edgeThreshold=15
                 )
             except TypeError:
-                # Minimal fallback
+                # Minimal parameters
                 self.orb = cv2.ORB_create(nfeatures=n_features)
-
+        
         print(f"[ORB] Created with {n_features} features")
-                
+        
         # Feature Matcher  
         self.bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         
@@ -116,17 +116,27 @@ class DriftCorrectedSLAM:
         print(f"  Features: {n_features}, Baseline: {baseline}m")
         
     def extract_features(self, image: np.ndarray):
-        """Extract ORB features"""
+        """Extract ORB features with enhanced preprocessing for OV9732"""
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image
-            
-        # Apply CLAHE for better feature detection
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        
+        # Enhanced CLAHE for grayscale cameras (OV9732)
+        # Higher clipLimit for better contrast on grayscale sensors
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         gray = clahe.apply(gray)
         
+        # Optional: Additional sharpening for grayscale
+        # kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        # gray = cv2.filter2D(gray, -1, kernel)
+        
         kp, desc = self.orb.detectAndCompute(gray, None)
+        
+        # Debug: Print feature count
+        if len(kp) < 100:
+            print(f"[SLAM] WARNING: Only {len(kp)} features detected!")
+        
         return kp, desc
     
     def match_features(self, desc1, desc2, ratio_thresh: float = 0.75):
@@ -188,10 +198,13 @@ class DriftCorrectedSLAM:
     def estimate_motion_with_outlier_rejection(self, kp_current, desc_current):
         """
         Estimate motion with enhanced outlier rejection
+        Optimized for grayscale cameras (OV9732)
         """
         matches = self.match_features(self.prev_desc, desc_current)
         
-        if len(matches) < 30:
+        # Lower threshold for grayscale cameras
+        if len(matches) < 20:  # Reduced from 30
+            print(f"[SLAM] Not enough matches: {len(matches)}")
             return False, None
         
         # Build correspondences
@@ -203,25 +216,27 @@ class DriftCorrectedSLAM:
                 pts_3d.append(self.prev_kp_to_3d[m.queryIdx])
                 pts_2d.append(kp_current[m.trainIdx].pt)
         
-        if len(pts_3d) < 15:
+        if len(pts_3d) < 12:  # Reduced from 15 for grayscale
+            print(f"[SLAM] Not enough 3D correspondences: {len(pts_3d)}")
             return False, None
         
         pts_3d = np.array(pts_3d, dtype=np.float32)
         pts_2d = np.array(pts_2d, dtype=np.float32)
         
-        # PnP RANSAC
+        # PnP RANSAC with adjusted params for grayscale
         success, rvec, tvec, inliers = cv2.solvePnPRansac(
             objectPoints=pts_3d,
             imagePoints=pts_2d,
             cameraMatrix=self.K,
             distCoeffs=None,
-            iterationsCount=200,
-            reprojectionError=3.0,  # Stricter threshold
+            iterationsCount=300,  # Increased iterations
+            reprojectionError=4.0,  # Slightly relaxed for grayscale
             confidence=0.99,
             flags=cv2.SOLVEPNP_ITERATIVE
         )
         
-        if not success or inliers is None or len(inliers) < 20:
+        if not success or inliers is None or len(inliers) < 15:  # Reduced from 20
+            print(f"[SLAM] PnP failed or too few inliers: {len(inliers) if inliers is not None else 0}")
             return False, None
         
         # Compute transformation
@@ -403,6 +418,7 @@ class DriftCorrectedSLAM:
     def process_frame(self, img_left: np.ndarray, img_right: np.ndarray):
         """
         Main SLAM processing with drift correction
+        Optimized for grayscale cameras (OV9732)
         """
         self.frame_count += 1
         
@@ -410,8 +426,10 @@ class DriftCorrectedSLAM:
         kp_left, desc_left = self.extract_features(img_left)
         kp_right, desc_right = self.extract_features(img_right)
         
-        if len(kp_left) < 50:
+        # Lower threshold for grayscale cameras
+        if len(kp_left) < 30:  # Reduced from 50
             self.tracking_quality = 'POOR'
+            print(f"[SLAM] Frame {self.frame_count}: Too few features ({len(kp_left)})")
             return self.current_pose, 'POOR'
         
         # Track previous frame
@@ -427,11 +445,17 @@ class DriftCorrectedSLAM:
                 self.current_pose = self.current_pose @ T_prev_to_current
                 
                 self.tracking_quality = 'GOOD'
+                
+                # Debug print
+                if self.frame_count % 30 == 0:
+                    print(f"[SLAM] Frame {self.frame_count}: {len(kp_left)} features, "
+                          f"{self.num_inliers} inliers, tracking={self.tracking_quality}")
             else:
                 self.tracking_quality = 'LOST'
                 print(f"[SLAM+] Frame {self.frame_count}: TRACKING LOST")
         else:
             self.tracking_quality = 'INIT'
+            print(f"[SLAM] Frame {self.frame_count}: INIT with {len(kp_left)} features")
         
         # Triangulate new 3D points
         pts_3d, kp_indices, _ = self.triangulate_stereo(
