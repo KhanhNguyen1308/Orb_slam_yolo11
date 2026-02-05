@@ -67,7 +67,6 @@ class OptimizedCameraStreamer:
             ggstreamer_pipeline = (
                 f'v4l2src device=/dev/video{self.camera_id} ! '
                 f'video/x-raw, width={self.width}, height={self.height}, '
-                f'framerate={self.config.fps}/1 ! ' 
                 f'videobalance contrast=1.3 saturation=1.4 brightness=-0.1 ! ' # Tăng tương phản, tăng màu, giảm sáng nhẹ
                 f'videoconvert ! '
                 f'video/x-raw, format=BGR ! '
