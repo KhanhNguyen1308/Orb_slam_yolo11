@@ -70,7 +70,7 @@ class HeadlessSLAMServer:
         
         # Drift-corrected SLAM
         self.slam = DriftCorrectedSLAM(
-            n_features=2000,
+            n_features=3000,
             baseline=0.10,
             focal_length=500
         )
